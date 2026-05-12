@@ -1,0 +1,48 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist_python/
+.eggs/
+
+# ── PyInstaller build artefacts (too large for git) ──────────────────────────
+build/
+dist/
+*.spec.bak
+
+# ── Local calibration scaler (machine-specific, auto-generated) ───────────────
+# ~/.sro_optimizer/ lives in home dir so it's never in the repo anyway
+
+# ── Collected telemetry data (can be huge) ───────────────────────────────────
+Data_collector/data/telemetry_raw.csv
+Data_collector/data/telemetry_clean.csv
+
+# ── Model checkpoints (keep .onnx and .pkl, skip large .pt) ──────────────────
+Data_collector/models/gru_checkpoint.pt
+Data_collector/models/gru_fp32.onnx
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env
+
+# ── IDE / editor ──────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*.DS_Store
+Thumbs.db
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Temporary files ───────────────────────────────────────────────────────────
+*.tmp
+*.bak
+/tmp/

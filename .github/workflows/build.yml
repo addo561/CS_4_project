@@ -1,0 +1,164 @@
+name: Build Desktop Apps
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:      # allows manual trigger from GitHub UI
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # macOS → System Resource Optimizer.app  (zipped)
+  # ────────────────────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Convert icon to ICNS
+        run: |
+          mkdir -p assets
+          cp assets/icon_proper.png assets/icon_build.png 2>/dev/null || \
+          cp assets/icon.png        assets/icon_build.png 2>/dev/null || \
+          echo "No icon found, skipping"
+
+          if [ -f assets/icon_build.png ]; then
+            ICONSET=assets/icon.iconset
+            mkdir -p "$ICONSET"
+            for SIZE in 16 32 64 128 256 512; do
+              sips -z $SIZE $SIZE assets/icon_build.png \
+                --out "$ICONSET/icon_${SIZE}x${SIZE}.png" > /dev/null 2>&1
+              DOUBLE=$((SIZE*2))
+              sips -z $DOUBLE $DOUBLE assets/icon_build.png \
+                --out "$ICONSET/icon_${SIZE}x${SIZE}@2x.png" > /dev/null 2>&1
+            done
+            iconutil -c icns "$ICONSET" -o assets/icon.icns 2>/dev/null || true
+          fi
+
+      - name: Build .app with PyInstaller
+        run: pyinstaller SystemResourceOptimizer.spec --clean -y
+
+      - name: Zip the .app
+        run: |
+          cd dist
+          zip -r "System_Resource_Optimizer_macOS.zip" "System Resource Optimizer.app"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-App
+          path: dist/System_Resource_Optimizer_macOS.zip
+          retention-days: 30
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Windows → SystemResourceOptimizer.exe  (zipped)
+  # ────────────────────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Build .exe with PyInstaller
+        run: |
+          pyinstaller `
+            --clean -y `
+            --name "SystemResourceOptimizer" `
+            --noconsole `
+            --add-data "Data_collector/models;models" `
+            --paths "files" `
+            --paths "data_pipeline" `
+            --paths "Data_collector" `
+            --hidden-import pipeline `
+            --hidden-import action_engine `
+            --hidden-import notifier `
+            --hidden-import config `
+            --hidden-import gru_model `
+            --hidden-import psutil `
+            --hidden-import onnxruntime `
+            --hidden-import sklearn `
+            --hidden-import pyqtgraph `
+            --hidden-import plyer `
+            --hidden-import plyer.platforms.win.notification `
+            --exclude-module torchvision `
+            --exclude-module torchaudio `
+            --exclude-module matplotlib `
+            --exclude-module tensorflow `
+            files/main.py
+
+      - name: Zip the .exe folder
+        run: |
+          Compress-Archive `
+            -Path "dist\SystemResourceOptimizer\*" `
+            -DestinationPath "dist\System_Resource_Optimizer_Windows.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Exe
+          path: dist\System_Resource_Optimizer_Windows.zip
+          retention-days: 30
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Create a GitHub Release with both downloads (only on version tags)
+  # Push a tag like:  git tag v1.0 && git push origin v1.0
+  # ────────────────────────────────────────────────────────────────────────────
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macOS-App
+          path: release/
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Windows-Exe
+          path: release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/System_Resource_Optimizer_macOS.zip
+            release/System_Resource_Optimizer_Windows.zip
+          body: |
+            ## System Resource Optimizer — ${{ github.ref_name }}
+
+            ### Downloads
+            | Platform | File |
+            |---|---|
+            | 🍎 macOS | `System_Resource_Optimizer_macOS.zip` → unzip → double-click the `.app` |
+            | 🪟 Windows | `System_Resource_Optimizer_Windows.zip` → unzip → run `SystemResourceOptimizer.exe` |
+
+            ### First Launch
+            - **macOS**: Right-click the `.app` → Open → Open (bypasses Gatekeeper)
+            - **Windows**: Double-click `.exe` (allow firewall if prompted)
