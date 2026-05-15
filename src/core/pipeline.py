@@ -168,16 +168,19 @@ class InferenceEngine:
         avg_mem = float(np.mean(recent[:, mem_idx]))   # normalised 0-1
         trend   = float(window[-1, cpu_idx] - window[-10, cpu_idx])
 
-        # ── Risk curve (non-linear, distinct from raw CPU%) ──────────────────
-        # Heuristic boost: react strongly if CURRENT load is high, even if window average is low
+        # ── Logic Integration from Proposal: Reactive Heuristic ───────────────
+        # Uses the current "spike" to drive confidence (replaces jump logic)
         curr_cpu = float(window[-1, cpu_idx])
         curr_mem = float(window[-1, mem_idx])
         
+        # Risk factors derived from load levels
         cpu_risk    = max(0.0, (avg_cpu - 0.35) / 0.55)
         mem_risk    = max(0.0, (avg_mem - 0.40) / 0.50)
-        spike_risk  = max(0.0, (curr_cpu - 0.75) * 2.0)   # 80% CPU → 0.1, 90% CPU → 0.3
+        spike_risk  = max(0.0, (curr_cpu - 0.70) * 2.5)   # 80% CPU -> 0.25, 90% CPU -> 0.5
         
-        trend_boost = max(0.0, min(0.20, trend * 0.6))
+        # Trend factor (how fast is it rising?)
+        trend_boost = max(0.0, min(0.25, trend * 0.7))
+        
         confidence  = min(1.0, max(cpu_risk, mem_risk, spike_risk) + trend_boost)
 
         # De-normalise using inverse_transform so values tally with the metric cards
@@ -356,6 +359,12 @@ class Pipeline:
                     window_arr = np.array(self._window, dtype=np.float32)
                     confidence, pred_cpu, pred_mem = self._engine.predict(window_arr)
                     
+                    # ── Safety Net from Proposal (Immediate Overload) ───────────────
+                    # If EMA load is extreme, force high confidence regardless of window average
+                    if self._ema_cpu > 92.0 or self._ema_mem > 90.0:
+                        confidence = max(confidence, 0.96)
+                        pred_cpu   = max(pred_cpu, self._ema_cpu)
+                        
                     if confidence >= CONFIDENCE_THRESHOLD * 0.85:
                         self._notifier.notify_warning(confidence, pred_cpu, pred_mem)
                     
