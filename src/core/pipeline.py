@@ -42,11 +42,11 @@ class PipelineResult:
     __slots__ = (
         "timestamp", "features", "confidence",
         "predicted_cpu", "predicted_mem",
-        "action", "warning_active",
+        "action", "warning_active", "calibrating",
     )
 
     def __init__(self, timestamp, features, confidence,
-                 predicted_cpu, predicted_mem, action, warning_active):
+                 predicted_cpu, predicted_mem, action, warning_active, calibrating=False):
         self.timestamp     = timestamp        # float (monotonic)
         self.features      = features         # dict  {col: raw_value}
         self.confidence    = confidence        # float 0–1
@@ -54,6 +54,7 @@ class PipelineResult:
         self.predicted_mem = predicted_mem    # float %
         self.action        = action           # ActionResult
         self.warning_active = warning_active  # bool
+        self.calibrating   = calibrating
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +332,7 @@ class Pipeline:
                         predicted_mem  = 0.0,
                         action         = ActionResult(),
                         warning_active = False,
+                        calibrating    = True,
                     )
                     self._on_result(result)
                     elapsed = time.monotonic() - tick

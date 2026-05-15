@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QFrame,
     QSystemTrayIcon, QMenu, QSplitter, QScrollArea, QHeaderView,
-    QProgressBar, QGraphicsDropShadowEffect, QDialog,
+    QProgressBar, QGraphicsDropShadowEffect, QDialog, QTextBrowser,
 )
 from PyQt6.QtCore import (
     Qt, QTimer, pyqtSignal, QObject, QThread, QSize,
@@ -23,11 +23,6 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QIcon, QColor, QFont, QPalette, QAction
 
 import pyqtgraph as pg
-
-import sys
-import os
-import time
-import collections
 
 # Add src to python path so submodules can find each other
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -173,45 +168,73 @@ QSplitter::handle {{ background-color: {BORDER}; width: 1px; }}
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("How to use AI Resource Optimizer")
-        self.setFixedSize(480, 520)
+        self.setWindowTitle("AI Resource Optimizer Guide")
+        self.setFixedSize(540, 600)
         self.setStyleSheet(QSS + f" QDialog {{ background-color: {BG}; border: 1px solid {BORDER}; }} ")
         
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 24, 24, 24)
-        lay.setSpacing(16)
+        lay.setContentsMargins(30, 30, 30, 30)
+        lay.setSpacing(20)
         
-        title = QLabel("Welcome to AI System Resource Optimizer")
+        title = QLabel("AI System Resource Optimizer")
         title.setObjectName("title")
-        title.setWordWrap(True)
+        title.setStyleSheet(f"color: {ACCENT}; font-size: 24px; font-weight: bold;")
         
-        desc = QLabel(
-            "This application uses a Quantized GRU Machine Learning model to "
-            "monitor your system telemetry and predict resource bottlenecks "
-            "before they happen.\n\n"
-            "<b>First Launch (Calibration):</b>\n"
-            "The app collects idle telemetry for 90 seconds to learn your specific "
-            "hardware baseline. During this time, predictions are paused.\n\n"
-            "<b>Features:</b>\n"
-            "• <b>Live Telemetry:</b> Real-time charts of CPU, Memory, and Thermals.\n"
-            "• <b>AI Prediction Panel:</b> Forecasts system load 30s into the future. A high Confidence Score (>80%) means a bottleneck is imminent.\n"
-            "• <b>One-Click Boost:</b> Instantly suspends non-critical, high-memory processes to free up system resources.\n"
-            "• <b>AI Auto-Pilot:</b> When enabled, the engine will automatically execute a Boost if the AI predicts an overload.\n"
-            "• <b>Event Log:</b> Tracks all telemetry metrics and XAI automated actions.\n\n"
-            "<i>Note: Core OS processes are whitelisted and never suspended.</i>"
-        )
-        desc.setWordWrap(True)
-        desc.setStyleSheet(f"line-height: 1.4; color: {TEXT_PRI}; font-size: 13px;")
+        # Use QTextBrowser for proper rich-text/HTML rendering
+        self.browser = QTextBrowser()
+        self.browser.setOpenExternalLinks(True)
+        self.browser.setStyleSheet(f"""
+            QTextBrowser {{
+                background-color: transparent;
+                border: none;
+                color: {TEXT_PRI};
+                font-size: 14px;
+                line-height: 1.6;
+            }}
+        """)
         
-        btn = QPushButton("Got it!")
-        btn.setFixedHeight(40)
+        html_content = f"""
+        <div style="color: {TEXT_PRI}; font-family: Arial, sans-serif;">
+            <p style="font-size: 15px;">This application uses a <b>Quantized GRU Machine Learning</b> model to 
+            monitor system telemetry and predict resource bottlenecks before they impact performance.</p>
+
+            <h3 style="color: {ACCENT}; margin-top: 20px;">🔬 First Launch: Calibration</h3>
+            <p>The app collects baseline telemetry for <b>90 seconds</b>. This allows the AI to learn 
+            your specific hardware characteristics. <i>Predictions are paused during this phase.</i></p>
+
+            <h3 style="color: {ACCENT}; margin-top: 20px;">🚀 Key Features</h3>
+            <ul>
+                <li><b>Live Telemetry:</b> Real-time charts of CPU, Memory, and Thermals.</li>
+                <li><b>AI Prediction:</b> Forecasts system load 30s into the future. High Confidence (>80%) triggers alerts.</li>
+                <li><b>One-Click Boost:</b> Instantly suspends non-critical, high-load processes.</li>
+                <li><b>AI Auto-Pilot:</b> Automatically executes a Boost if a bottleneck is predicted.</li>
+                <li><b>Safe List:</b> System-critical processes (Kernel, WindowServer, etc.) are whitelisted and protected.</li>
+            </ul>
+
+            <h3 style="color: {ACCENT}; margin-top: 20px;">🛠 Management</h3>
+            <p>Use the <b>Suspended Processes</b> table to see what has been paused, and use 
+            the <b>Undo</b> button to resume them at any time.</p>
+        </div>
+        """
+        self.browser.setHtml(html_content)
+        
+        btn = QPushButton("Start Optimizing")
+        btn.setFixedHeight(45)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(f"background:{ACCENT}; color:#000; border-radius:4px; font-weight:bold; font-size: 14px;")
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {ACCENT};
+                color: #0D1117;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 15px;
+            }}
+            QPushButton:hover {{ background-color: #00E5AD; }}
+        """)
         btn.clicked.connect(self.accept)
         
         lay.addWidget(title)
-        lay.addWidget(desc)
-        lay.addStretch()
+        lay.addWidget(self.browser)
         lay.addWidget(btn)
 
 # ── Thread-safe bridge from Pipeline thread to Qt main thread ─────────────────
@@ -336,7 +359,14 @@ class ConfidencePanel(QFrame):
         lay.addSpacing(8)
         lay.addWidget(self._bar)
 
-    def update(self, confidence: float, pred_cpu: float, pred_mem: float):
+    def update(self, confidence: float, pred_cpu: float, pred_mem: float, calibrating: bool = False):
+        if calibrating:
+            self._pct.setText("🔬")
+            self._pct.setStyleSheet(f"color: {ACCENT_WARN}; font-size: 36px; font-weight: bold;")
+            self._desc.setText("Calibrating to hardware...")
+            self._bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {ACCENT_WARN}; border-radius: 4px; }}")
+            return
+
         pct = int(confidence * 100)
         self._pct.setText(f"{pct}%")
         self._bar.setValue(pct)
@@ -438,7 +468,7 @@ class MainWindow(QMainWindow):
         self._setup_tray()
 
         # ── Notifier: use tray bubble as the in-app channel ──────────────────
-        from notifier import Notifier
+        from core.notifier import Notifier
         self._notifier = Notifier()
         self._notifier.on_notify = self._show_tray_message
 
@@ -553,7 +583,7 @@ class MainWindow(QMainWindow):
         left_lay.addWidget(proc_hdr)
 
         self._proc_table = QTableWidget(0, 4)
-        self._proc_table.setHorizontalHeaderLabels(["PID", "Process Name", "CPU %", "Status"])
+        self._proc_table.setHorizontalHeaderLabels(["PID", "Process Name", "MEM %", "Status"])
         self._proc_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._proc_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._proc_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -649,9 +679,13 @@ class MainWindow(QMainWindow):
         self._tray = QSystemTrayIcon(self)
         self._tray.setToolTip("System Resource Optimizer")
 
-        # Set icon before calling show() — avoids 'No Icon set' warning
-        import os, platform
-        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Handle PyInstaller path resolution
+        import sys
+        if getattr(sys, 'frozen', False):
+            _root = sys._MEIPASS
+        else:
+            _root = os.path.dirname(os.path.abspath(__file__))
+
         _icon_paths = [
             os.path.join(_root, "assets", "icon_proper.png"),
             os.path.join(_root, "assets", "icon.png"),
@@ -659,6 +693,7 @@ class MainWindow(QMainWindow):
         for _p in _icon_paths:
             if os.path.isfile(_p):
                 self._tray.setIcon(QIcon(_p))
+                self.setWindowIcon(QIcon(_p)) # Also set main window icon
                 break
         else:
             self._tray.setIcon(self.style().standardIcon(
@@ -698,7 +733,7 @@ class MainWindow(QMainWindow):
             self._chart_temp.push(temp)
 
         # AI panel
-        self._conf_panel.update(result.confidence, result.predicted_cpu, result.predicted_mem)
+        self._conf_panel.update(result.confidence, result.predicted_cpu, result.predicted_mem, result.calibrating)
 
         # Extended Telemetry logging (every ~1 min)
         self._cycle_count += 1
@@ -740,10 +775,15 @@ class MainWindow(QMainWindow):
             self._log.add(result.action.message, "action")
             self._undo_btn.setEnabled(True)
             self._refresh_susp_table()
+        
+        # Periodic sync check: Ensure Undo button is active if any processes are suspended
+        if self._pipeline.get_suspended_processes():
+            if not self._undo_btn.isEnabled():
+                self._undo_btn.setEnabled(True)
 
     def _on_calibration_progress(self, elapsed: int, total: int):
         """Called every second during calibration. elapsed=-1 means done."""
-        if elapsed == 0:
+        if 0 <= elapsed <= 1:
             # First tick — show the banner
             self._cal_banner.setVisible(True)
             self._cal_bar.setRange(0, total)
@@ -792,7 +832,9 @@ class MainWindow(QMainWindow):
         result = self._pipeline.trigger_boost()
         self._log.add(result.message, "action")
         self._notifier.notify_boost()
-        self._undo_btn.setEnabled(False)
+        self._undo_btn.setEnabled(True)
+        self._refresh_susp_table()
+        self._refresh_proc_table()
         self._refresh_susp_table()
 
     def _on_undo(self):
@@ -805,32 +847,37 @@ class MainWindow(QMainWindow):
     # ── Table refresh ────────────────────────────────────────────────────────
 
     def _refresh_proc_table(self):
+        if not self.isVisible():
+            return
         import psutil
-        procs = sorted(
-            psutil.process_iter(["pid", "name", "cpu_percent", "status"]),
-            key=lambda p: p.info.get("cpu_percent") or 0,
-            reverse=True
-        )[:20]
+        try:
+            procs = sorted(
+                psutil.process_iter(["pid", "name", "status", "memory_percent"]),
+                key=lambda p: p.info.get("memory_percent") or 0,
+                reverse=True
+            )[:20]
 
-        self._proc_table.setRowCount(len(procs))
-        for row, proc in enumerate(procs):
-            try:
-                info = proc.info
-                status = info.get("status", "")
-                color = QColor(ACCENT_CRIT) if status == "stopped" else QColor(TEXT_PRI)
+            self._proc_table.setRowCount(len(procs))
+            for row, proc in enumerate(procs):
+                try:
+                    info = proc.info
+                    status = info.get("status", "")
+                    color = QColor(ACCENT_CRIT) if status == "stopped" else QColor(TEXT_PRI)
 
-                items = [
-                    str(info.get("pid", "")),
-                    info.get("name", ""),
-                    f"{info.get('cpu_percent') or 0:.1f}",
-                    status,
-                ]
-                for col, text in enumerate(items):
-                    item = QTableWidgetItem(text)
-                    item.setForeground(color)
-                    self._proc_table.setItem(row, col, item)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+                    items = [
+                        str(info.get("pid", "")),
+                        info.get("name", ""),
+                        f"{info.get('memory_percent') or 0:.1f}",
+                        status,
+                    ]
+                    for col, text in enumerate(items):
+                        item = QTableWidgetItem(text)
+                        item.setForeground(color)
+                        self._proc_table.setItem(row, col, item)
+                except:
+                    pass
+        except:
+            pass
 
     def _refresh_susp_table(self):
         suspended = self._pipeline.get_suspended_processes()
