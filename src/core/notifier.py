@@ -28,10 +28,10 @@ if _OS == "Windows":
 
 def _send_macos(title: str, message: str):
     """Use macOS built-in osascript — no external dependencies needed."""
-    # Escape single quotes to avoid breaking the AppleScript string
-    title   = title.replace("'", "\\'")
-    message = message.replace("'", "\\'")
-    script  = f"display notification \"{message}\" with title \"{title}\""
+    # Escape quotes to avoid breaking the AppleScript string
+    title   = title.replace('"', '\\"').replace("'", "\\'")
+    message = message.replace('"', '\\"').replace("'", "\\'")
+    script  = f'display notification "{message}" with title "{title}"'
     subprocess.Popen(
         ["osascript", "-e", script],
         stdout=subprocess.DEVNULL,
@@ -125,9 +125,9 @@ class Notifier:
 
     def notify_autopilot(self, message: str):
         self.send(
-            title   = "🤖 Auto-Pilot Action",
-            message = message,
-            timeout = 5,
+            title   = "🤖 AI Auto-Pilot Action",
+            message = f"AI Optimizer: {message}",
+            timeout = 7,
         )
 
     def notify_warning(self, confidence: float, cpu: float, mem: float):

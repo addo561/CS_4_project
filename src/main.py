@@ -385,7 +385,7 @@ class ConfidencePanel(QFrame):
             self._desc.setText(f"Moderate risk — monitoring closely\nCPU ≈ {pred_cpu:.0f}%")
         else:
             color = ACCENT
-            self._desc.setText("System healthy — no action needed")
+            self._desc.setText("System healthy — scanning for risks...")
 
         self._pct.setStyleSheet(f"color: {color}; font-size: 36px; font-weight: bold;")
         self._bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {color}; border-radius: 4px; }}")
@@ -734,6 +734,8 @@ class MainWindow(QMainWindow):
 
         # AI panel
         self._conf_panel.update(result.confidence, result.predicted_cpu, result.predicted_mem, result.calibrating)
+        if result.calibrating:
+            self._cal_banner.setVisible(True)
 
         # Extended Telemetry logging (every ~1 min)
         self._cycle_count += 1

@@ -88,6 +88,11 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+_ICON = os.path.join(ROOT, "src", "assets", "icon.icns")
+if platform.system() == "Windows":
+    # On Windows, use the high-res PNG; PyInstaller/Pillow will convert it to ICO
+    _ICON = os.path.join(ROOT, "src", "assets", "icon_proper.png")
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -103,7 +108,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=os.path.join(ROOT, "src", "assets", "icon.icns"),
+    icon=_ICON,
 )
 
 coll = COLLECT(
@@ -116,19 +121,21 @@ coll = COLLECT(
     name="SystemResourceOptimizer",
 )
 
-app = BUNDLE(
-    coll,
-    name="System Resource Optimizer.app",
-    icon=os.path.join(ROOT, "src", "assets", "icon.icns"),
-    bundle_identifier="com.knust.group4.systemresourceoptimizer",
-    info_plist={
-        "CFBundleName":             "System Resource Optimizer",
-        "CFBundleDisplayName":      "System Resource Optimizer",
-        "CFBundleVersion":          "1.0.0",
-        "CFBundleShortVersionString": "1.0.0",
-        "NSHighResolutionCapable":  True,
-        "NSHumanReadableCopyright": "© 2026 KNUST Group 4",
-        "LSMinimumSystemVersion":   "10.14",
-        "NSRequiresAquaSystemAppearance": False,   # supports dark mode
-    },
-)
+import platform
+if platform.system() == 'Darwin':
+    app = BUNDLE(
+        coll,
+        name="System Resource Optimizer.app",
+        icon=os.path.join(ROOT, "src", "assets", "icon.icns"),
+        bundle_identifier="com.knust.group4.systemresourceoptimizer",
+        info_plist={
+            "CFBundleName":             "System Resource Optimizer",
+            "CFBundleDisplayName":      "System Resource Optimizer",
+            "CFBundleVersion":          "1.0.0",
+            "CFBundleShortVersionString": "1.0.0",
+            "NSHighResolutionCapable":  True,
+            "NSHumanReadableCopyright": "© 2026 KNUST Group 4",
+            "LSMinimumSystemVersion":   "10.14",
+            "NSRequiresAquaSystemAppearance": False,   # supports dark mode
+        },
+    )
