@@ -3,6 +3,8 @@ name: Build Desktop Apps
 on:
   push:
     branches: [main, master]
+    tags:
+      - 'v*'
   workflow_dispatch:      # allows manual trigger from GitHub UI
 
 jobs:
