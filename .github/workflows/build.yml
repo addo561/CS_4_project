@@ -51,10 +51,17 @@ jobs:
 
       - name: Create DMG
         run: |
+          echo "Listing dist directory for debugging:"
+          ls -R dist
           cd dist
-          hdiutil create -volname "System Resource Optimizer" \
-            -srcfolder "System Resource Optimizer.app" \
-            -ov -format UDZO "System_Resource_Optimizer.dmg"
+          if [ -d "System Resource Optimizer.app" ]; then
+            hdiutil create -volname "System Resource Optimizer" \
+              -srcfolder "System Resource Optimizer.app" \
+              -ov -format UDZO "System_Resource_Optimizer.dmg"
+          else
+            echo "Error: System Resource Optimizer.app not found in dist/"
+            exit 1
+          fi
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4

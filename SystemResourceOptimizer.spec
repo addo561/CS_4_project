@@ -94,18 +94,19 @@ exe = EXE(
     a.binaries if is_win else [],
     a.zipfiles if is_win else [],
     a.datas    if is_win else [],
-    name="SystemResourceOptimizer",
+    name="SystemResourceOptimizer_bin" if not is_win else "SystemResourceOptimizer",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,          # no terminal window
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon=_ICON,
+    exclude_binaries=not is_win,
 )
 
 if not is_win:
