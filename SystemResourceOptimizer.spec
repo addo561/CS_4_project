@@ -4,7 +4,9 @@
 # Usage:  pyinstaller SystemResourceOptimizer.spec
 # =============================================================================
 
-import os, sys
+import os
+import sys
+import platform
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = os.path.dirname(os.path.abspath(SPEC))   # Final_year/
@@ -23,31 +25,22 @@ hidden = [
     # Our own modules
     "core.pipeline", "core.action_engine", "core.notifier", "config",
     # psutil
-    "psutil", "psutil._psmacosx", "psutil._common",
-    # sklearn
-    "sklearn", "sklearn.utils._cython_blas",
-    "sklearn.neighbors.typedefs",
-    "sklearn.neighbors.quad_tree",
-    "sklearn.tree._utils",
+    "psutil",
     # onnxruntime
     "onnxruntime",
-    "onnxruntime.capi",
-    "onnxruntime.capi.onnxruntime_pybind11_state",
-    # torch (core only — avoids pulling in CUDA)
-    "torch", "torch.nn", "torch.onnx",
-    # plyer
-    "plyer", "plyer.platforms.macosx.notification",
+    # sklearn
+    "sklearn", "sklearn.utils._cython_blas", "sklearn.neighbors.typedefs", 
+    "sklearn.neighbors.quad_tree", "sklearn.tree._utils",
     # pyqtgraph
-    "pyqtgraph",
-    "pyqtgraph.graphicsItems",
+    "pyqtgraph", "pyqtgraph.graphicsItems",
+    # plyer
+    "plyer", "plyer.platforms.win.notification", "plyer.platforms.macosx.notification",
 ]
 
+# ── Analysis ─────────────────────────────────────────────────────────────────
 a = Analysis(
     [os.path.join(ROOT, "src", "main.py")],
-    pathex=[
-        ROOT,
-        os.path.join(ROOT, "src"),
-    ],
+    pathex=[os.path.join(ROOT, "src")],
     binaries=[],
     datas=added_files,
     hiddenimports=hidden,
@@ -121,7 +114,6 @@ coll = COLLECT(
     name="SystemResourceOptimizer",
 )
 
-import platform
 if platform.system() == 'Darwin':
     app = BUNDLE(
         coll,

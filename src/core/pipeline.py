@@ -169,10 +169,16 @@ class InferenceEngine:
         trend   = float(window[-1, cpu_idx] - window[-10, cpu_idx])
 
         # ── Risk curve (non-linear, distinct from raw CPU%) ──────────────────
-        cpu_risk    = max(0.0, (avg_cpu - 0.40) / 0.55)
-        mem_risk    = max(0.0, (avg_mem - 0.45) / 0.50)
-        trend_boost = max(0.0, min(0.15, trend * 0.5))
-        confidence  = min(1.0, max(cpu_risk, mem_risk) + trend_boost)
+        # Heuristic boost: react strongly if CURRENT load is high, even if window average is low
+        curr_cpu = float(window[-1, cpu_idx])
+        curr_mem = float(window[-1, mem_idx])
+        
+        cpu_risk    = max(0.0, (avg_cpu - 0.35) / 0.55)
+        mem_risk    = max(0.0, (avg_mem - 0.40) / 0.50)
+        spike_risk  = max(0.0, (curr_cpu - 0.75) * 2.0)   # 80% CPU → 0.1, 90% CPU → 0.3
+        
+        trend_boost = max(0.0, min(0.20, trend * 0.6))
+        confidence  = min(1.0, max(cpu_risk, mem_risk, spike_risk) + trend_boost)
 
         # De-normalise using inverse_transform so values tally with the metric cards
         # Build a dummy vector at the average values then invert it
@@ -349,9 +355,13 @@ class Pipeline:
                 if len(self._window) == WINDOW_SIZE:
                     window_arr = np.array(self._window, dtype=np.float32)
                     confidence, pred_cpu, pred_mem = self._engine.predict(window_arr)
-
+                    
                     if confidence >= CONFIDENCE_THRESHOLD * 0.85:
                         self._notifier.notify_warning(confidence, pred_cpu, pred_mem)
+                    
+                    # Diagnostic logging
+                    if int(time.monotonic()) % 10 == 0:
+                        log.debug(f"AI Prediction Engine: Confidence={confidence:.2f}, PredCPU={pred_cpu:.1f}%")
 
                     now = time.monotonic()
                     if now - self._last_action_time > 30:
