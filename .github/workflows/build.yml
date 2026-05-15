@@ -115,12 +115,14 @@ jobs:
         with:
           name: macOS-DMG
           path: release/
+          merge-multiple: true
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
           name: Windows-Exe
           path: release/
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
