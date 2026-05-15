@@ -26,5 +26,5 @@ IF %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-python files\main.py
+python src\main.py
 pause

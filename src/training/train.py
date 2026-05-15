@@ -22,16 +22,12 @@ from sklearn.metrics import (
     confusion_matrix, mean_absolute_error
 )
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-if _THIS_DIR not in sys.path:
-    sys.path.insert(0, _THIS_DIR)
-
-from config import (          # resolved via files/config.py shim
+from config import (
     DATA_DIR, MODEL_DIR, WINDOW_SIZE,
     GRU_HIDDEN_SIZE, GRU_NUM_LAYERS, DROPOUT,
     LEARNING_RATE, BATCH_SIZE, MAX_EPOCHS, PATIENCE,
 )
-from gru_model import ResourceGRU
+from training.gru_model import ResourceGRU
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("train")

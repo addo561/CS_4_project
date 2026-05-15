@@ -23,8 +23,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller pillow
+          pip install psutil numpy scikit-learn onnxruntime PyQt6 pyqtgraph plyer pyinstaller pillow
+
 
       - name: Convert icon to ICNS
         run: |
@@ -78,8 +78,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller pillow
+          pip install psutil numpy scikit-learn onnxruntime PyQt6 pyqtgraph plyer pyinstaller pillow
 
       - name: Build .exe with PyInstaller
         run: |
@@ -87,26 +86,33 @@ jobs:
             --clean -y `
             --name "SystemResourceOptimizer" `
             --noconsole `
-            --add-data "Data_collector/models;models" `
-            --paths "files" `
-            --paths "data_pipeline" `
-            --paths "Data_collector" `
-            --hidden-import pipeline `
-            --hidden-import action_engine `
-            --hidden-import notifier `
+            --add-data "src/models;models" `
+            --paths "src" `
+            --hidden-import core.pipeline `
+            --hidden-import core.action_engine `
+            --hidden-import core.notifier `
             --hidden-import config `
-            --hidden-import gru_model `
             --hidden-import psutil `
             --hidden-import onnxruntime `
             --hidden-import sklearn `
             --hidden-import pyqtgraph `
             --hidden-import plyer `
             --hidden-import plyer.platforms.win.notification `
+            --exclude-module torch `
             --exclude-module torchvision `
             --exclude-module torchaudio `
+            --exclude-module pandas `
             --exclude-module matplotlib `
             --exclude-module tensorflow `
-            files/main.py
+            --exclude-module PyQt6.QtWebEngine `
+            --exclude-module PyQt6.QtWebEngineCore `
+            --exclude-module PyQt6.QtWebEngineWidgets `
+            --exclude-module PyQt6.QtQml `
+            --exclude-module PyQt6.QtQuick `
+            --exclude-module PyQt6.QtNetwork `
+            --exclude-module PyQt6.QtSql `
+            --exclude-module PyQt6.QtTest `
+            src/main.py
 
       - name: Zip the .exe folder
         run: |

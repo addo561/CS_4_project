@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QFrame,
     QSystemTrayIcon, QMenu, QSplitter, QScrollArea, QHeaderView,
-    QProgressBar, QGraphicsDropShadowEffect,
+    QProgressBar, QGraphicsDropShadowEffect, QDialog,
 )
 from PyQt6.QtCore import (
     Qt, QTimer, pyqtSignal, QObject, QThread, QSize,
@@ -24,14 +24,18 @@ from PyQt6.QtGui import QIcon, QColor, QFont, QPalette, QAction
 
 import pyqtgraph as pg
 
-# Add this folder to path — local shim files (pipeline.py, config.py)
-# in the same directory handle all cross-folder resolution automatically.
+import sys
+import os
+import time
+import collections
+
+# Add src to python path so submodules can find each other
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-from pipeline import Pipeline, PipelineResult  # resolved via files/pipeline.py shim
-from config import CONFIDENCE_THRESHOLD        # resolved via files/config.py shim
+from core.pipeline import Pipeline, PipelineResult
+from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS
 
 # ── Colour constants ──────────────────────────────────────────────────────────
 BG          = "#0D1117"
@@ -165,6 +169,50 @@ QProgressBar::chunk {{ border-radius: 4px; }}
 QSplitter::handle {{ background-color: {BORDER}; width: 1px; }}
 """
 
+# ── Help / Instructions Dialog ────────────────────────────────────────────────
+class HelpDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("How to use AI Resource Optimizer")
+        self.setFixedSize(480, 520)
+        self.setStyleSheet(QSS + f" QDialog {{ background-color: {BG}; border: 1px solid {BORDER}; }} ")
+        
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 24, 24, 24)
+        lay.setSpacing(16)
+        
+        title = QLabel("Welcome to AI System Resource Optimizer")
+        title.setObjectName("title")
+        title.setWordWrap(True)
+        
+        desc = QLabel(
+            "This application uses a Quantized GRU Machine Learning model to "
+            "monitor your system telemetry and predict resource bottlenecks "
+            "before they happen.\n\n"
+            "<b>First Launch (Calibration):</b>\n"
+            "The app collects idle telemetry for 90 seconds to learn your specific "
+            "hardware baseline. During this time, predictions are paused.\n\n"
+            "<b>Features:</b>\n"
+            "• <b>Live Telemetry:</b> Real-time charts of CPU, Memory, and Thermals.\n"
+            "• <b>AI Prediction Panel:</b> Forecasts system load 30s into the future. A high Confidence Score (>80%) means a bottleneck is imminent.\n"
+            "• <b>One-Click Boost:</b> Instantly suspends non-critical, high-memory processes to free up system resources.\n"
+            "• <b>AI Auto-Pilot:</b> When enabled, the engine will automatically execute a Boost if the AI predicts an overload.\n"
+            "• <b>Event Log:</b> Tracks all telemetry metrics and XAI automated actions.\n\n"
+            "<i>Note: Core OS processes are whitelisted and never suspended.</i>"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"line-height: 1.4; color: {TEXT_PRI}; font-size: 13px;")
+        
+        btn = QPushButton("Got it!")
+        btn.setFixedHeight(40)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(f"background:{ACCENT}; color:#000; border-radius:4px; font-weight:bold; font-size: 14px;")
+        btn.clicked.connect(self.accept)
+        
+        lay.addWidget(title)
+        lay.addWidget(desc)
+        lay.addStretch()
+        lay.addWidget(btn)
 
 # ── Thread-safe bridge from Pipeline thread to Qt main thread ─────────────────
 class PipelineBridge(QObject):
@@ -376,6 +424,7 @@ class MainWindow(QMainWindow):
 
         self._autopilot_enabled   = False
         self._autopilot_last_fire = 0.0
+        self._cycle_count         = 0
 
         self._pipeline_bridge = PipelineBridge()
         self._pipeline_bridge.result_ready.connect(self._on_result)
@@ -395,6 +444,16 @@ class MainWindow(QMainWindow):
 
         self._pipeline.start()
         self._log.add("Pipeline started — collecting telemetry", "info")
+
+        # Show calibration banner immediately if pipeline starts in calibration mode
+        if self._pipeline._calibrating:
+            QTimer.singleShot(500, lambda: self._on_calibration_progress(0, CALIBRATION_SECONDS))
+            # Also auto-show instructions on first use
+            QTimer.singleShot(1500, self._show_help)
+
+    def _show_help(self):
+        dlg = HelpDialog(self)
+        dlg.exec()
 
     # ── UI construction ──────────────────────────────────────────────────────
 
@@ -446,8 +505,15 @@ class MainWindow(QMainWindow):
         self._status_lbl = QLabel("Live")
         self._status_lbl.setStyleSheet(f"color: {TEXT_SEC}; font-size: 12px;")
 
+        help_btn = QPushButton("ℹ️ Help")
+        help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        help_btn.setStyleSheet(f"background: transparent; border: 1px solid {BORDER}; border-radius: 4px; padding: 4px 8px;")
+        help_btn.clicked.connect(self._show_help)
+
         h_lay.addWidget(title)
         h_lay.addStretch()
+        h_lay.addWidget(help_btn)
+        h_lay.addSpacing(10)
         h_lay.addWidget(self._status_dot)
         h_lay.addWidget(self._status_lbl)
         root_lay.addWidget(header)
@@ -618,21 +684,33 @@ class MainWindow(QMainWindow):
     def _on_result(self, result: PipelineResult):
         f = result.features
 
-        # Metric cards
-        self._card_cpu.update(f.get("cpu_percent", 0))
-        self._card_mem.update(f.get("mem_percent", 0))
+        # Metric cards — use raw (unsmoothed) values for display accuracy
+        self._card_cpu.update(f.get("cpu_percent_raw", f.get("cpu_percent", 0)))
+        self._card_mem.update(f.get("mem_percent_raw", f.get("mem_percent", 0)))
         temp = f.get("cpu_temp_c", -1)
         self._card_temp.update(temp if temp > 0 else 0)
         self._card_swap.update(f.get("swap_percent", 0))
 
-        # Charts
-        self._chart_cpu.push(f.get("cpu_percent", 0))
-        self._chart_mem.push(f.get("mem_percent", 0))
+        # Charts — use raw values for accuracy
+        self._chart_cpu.push(f.get("cpu_percent_raw", f.get("cpu_percent", 0)))
+        self._chart_mem.push(f.get("mem_percent_raw", f.get("mem_percent", 0)))
         if temp > 0:
             self._chart_temp.push(temp)
 
         # AI panel
         self._conf_panel.update(result.confidence, result.predicted_cpu, result.predicted_mem)
+
+        # Extended Telemetry logging (every ~1 min)
+        self._cycle_count += 1
+        if self._cycle_count % 30 == 0:
+            uptime_hrs = f.get('uptime_sec', 0) / 3600
+            self._log.add(
+                f"Health Check: {f.get('process_count', 0)} processes, "
+                f"Up: {uptime_hrs:.1f}h. "
+                f"Net: {f.get('net_sent_mbps', 0):.1f}↑ {f.get('net_recv_mbps', 0):.1f}↓ MB/s. "
+                f"Disk: {f.get('disk_read_mbps', 0):.1f}R {f.get('disk_write_mbps', 0):.1f}W MB/s.",
+                "info"
+            )
 
         # Status dot colour
         if result.confidence >= CONFIDENCE_THRESHOLD:

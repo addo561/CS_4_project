@@ -88,8 +88,8 @@ def create_shortcut():
 create_shortcut()
 
 # ── 4. Check if trained model exists ─────────────────────────────────────────
-MODEL = os.path.join(HERE, "Data_collector", "models", "gru_quantized.onnx")
-SCALER = os.path.join(HERE, "Data_collector", "models", "scaler.pkl")
+MODEL = os.path.join(HERE, "src", "models", "gru_quantized.onnx")
+SCALER = os.path.join(HERE, "src", "models", "scaler.pkl")
 
 if not os.path.isfile(MODEL) or not os.path.isfile(SCALER):
     print()
@@ -98,13 +98,13 @@ if not os.path.isfile(MODEL) or not os.path.isfile(SCALER):
     print(yellow("   To train the model, run these commands first:"))
     print()
     if OS == "Windows":
-        print(yellow("   python Data_collector\\collector.py --label idle  (run 5+ min, then Ctrl+C)"))
-        print(yellow("   python Data_collector\\preprocess.py"))
-        print(yellow("   python files\\train.py"))
+        print(yellow("   python src\\core\\collector.py --label idle  (run 5+ min, then Ctrl+C)"))
+        print(yellow("   python src\\training\\preprocess.py"))
+        print(yellow("   python src\\training\\train.py"))
     else:
-        print(yellow("   python3 Data_collector/collector.py --label idle  (run 5+ min, then Ctrl+C)"))
-        print(yellow("   python3 Data_collector/preprocess.py"))
-        print(yellow("   python3 files/train.py"))
+        print(yellow("   python3 src/core/collector.py --label idle  (run 5+ min, then Ctrl+C)"))
+        print(yellow("   python3 src/training/preprocess.py"))
+        print(yellow("   python3 src/training/train.py"))
     print()
     proceed = input("Launch app anyway? [Y/n]: ").strip().lower()
     if proceed == "n":
@@ -117,7 +117,7 @@ print()
 print(bold("🚀  Launching System Resource Optimizer..."))
 print()
 
-main_py = os.path.join(HERE, "files", "main.py")
+main_py = os.path.join(HERE, "src", "main.py")
 
 try:
     subprocess.Popen(

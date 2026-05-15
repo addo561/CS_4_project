@@ -21,15 +21,6 @@ from typing import Callable, Optional
 import numpy as np
 import psutil
 
-_THIS_DIR    = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_DIR = os.path.dirname(_THIS_DIR)            # Final_year/
-_COLLECTOR   = os.path.join(_PROJECT_DIR, "Data_collector")
-
-# Make both this folder and Data_collector available for imports
-for _p in (_THIS_DIR, _COLLECTOR):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
 from config import (
     FEATURE_COLS, WINDOW_SIZE, POLL_INTERVAL_SEC,
     CONFIDENCE_THRESHOLD, TEMP_FALLBACK,
@@ -37,8 +28,8 @@ from config import (
     LOCAL_SCALER_PATH, LOCAL_SCALER_DIR, CALIBRATION_SECONDS,
     CPU_BOTTLENECK_PCT, MEM_BOTTLENECK_PCT,
 )
-from action_engine import ActionEngine, ActionResult
-from notifier import Notifier
+from core.action_engine import ActionEngine, ActionResult
+from core.notifier import Notifier
 
 log = logging.getLogger("pipeline")
 
@@ -250,6 +241,24 @@ class Pipeline:
         # Give the engine a reference to the scaler for proper inverse_transform
         self._engine._scaler = self._scaler
 
+        # ── EMA smoothing (from proposal ui.py) ─────────────────────────────
+        # Exponential Moving Average reduces spike noise in CPU/MEM readings.
+        # alpha=0.3: lower = smoother, higher = more responsive.
+        self._ema_cpu: float = 0.0
+        self._ema_mem: float = 0.0
+        self._ema_init = False   # set False so first value initialises without smoothing
+
+        # ── I/O baselines (for net/disk speed calculation) ───────────────────
+        try:
+            self._last_net  = psutil.net_io_counters()
+        except Exception:
+            self._last_net  = None
+        try:
+            self._last_disk = psutil.disk_io_counters()
+        except Exception:
+            self._last_disk = None
+        self._last_io_time = time.time()
+
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def start(self):
@@ -394,23 +403,82 @@ class Pipeline:
     # ── Data collection ──────────────────────────────────────────────────────
 
     def _collect_raw(self) -> dict:
-        """Collect one raw telemetry sample (mirrors collector.py logic)."""
-        cpu_pct   = psutil.cpu_percent(interval=None)
-        per_core  = psutil.cpu_percent(interval=None, percpu=True)
-        freq      = psutil.cpu_freq()
-        mem       = psutil.virtual_memory()
-        swap      = psutil.swap_memory()
-        temp      = self._get_temp()
+        """
+        Collect one telemetry sample.
+        Mirrors proposal data.py SystemMonitor.get_current_stats() —
+        adds network I/O, disk I/O, uptime, and process count on top of
+        the existing CPU/mem/freq/temp features.
+        EMA smoothing is applied to cpu_percent and mem_percent.
+        """
+        # ── Core metrics ──────────────────────────────────────────────────────
+        cpu_pct  = psutil.cpu_percent(interval=None)
+        per_core = psutil.cpu_percent(interval=None, percpu=True)
+        freq     = psutil.cpu_freq()
+        mem      = psutil.virtual_memory()
+        swap     = psutil.swap_memory()
+        temp     = self._get_temp()
+
+        # ── EMA smoothing (proposal alpha=0.3) ────────────────────────────────
+        alpha = 0.3
+        if not self._ema_init:
+            self._ema_cpu  = cpu_pct
+            self._ema_mem  = mem.percent
+            self._ema_init = True
+        else:
+            self._ema_cpu = cpu_pct * alpha + self._ema_cpu * (1 - alpha)
+            self._ema_mem = mem.percent * alpha + self._ema_mem * (1 - alpha)
+
+        # ── Network + Disk I/O speeds ─────────────────────────────────────────
+        now      = time.time()
+        dt       = max(now - self._last_io_time, 0.001)
+        net_sent = net_recv = disk_read = disk_write = 0.0
+        try:
+            cur_net  = psutil.net_io_counters()
+            if self._last_net:
+                net_sent  = (cur_net.bytes_sent - self._last_net.bytes_sent) / dt / 1_048_576
+                net_recv  = (cur_net.bytes_recv - self._last_net.bytes_recv) / dt / 1_048_576
+            self._last_net = cur_net
+        except Exception:
+            pass
+        try:
+            cur_disk = psutil.disk_io_counters()
+            if self._last_disk and cur_disk:
+                disk_read  = (cur_disk.read_bytes  - self._last_disk.read_bytes)  / dt / 1_048_576
+                disk_write = (cur_disk.write_bytes - self._last_disk.write_bytes) / dt / 1_048_576
+            self._last_disk = cur_disk
+        except Exception:
+            pass
+        self._last_io_time = now
+
+        # ── System health ─────────────────────────────────────────────────────
+        try:
+            uptime_sec = now - psutil.boot_time()
+        except Exception:
+            uptime_sec = 0.0
+        try:
+            process_count = len(psutil.pids())
+        except Exception:
+            process_count = 0
 
         raw = {
-            "cpu_percent":      round(cpu_pct, 2),
+            # Core features (used by model)
+            "cpu_percent":      round(self._ema_cpu, 2),
+            "cpu_percent_raw":  round(cpu_pct, 2),        # unsmoothed, for display
             "cpu_freq_mhz":     round(freq.current, 1) if freq else 0.0,
             "mem_used_mb":      round(mem.used / 1_048_576, 2),
             "mem_available_mb": round(mem.available / 1_048_576, 2),
-            "mem_percent":      round(mem.percent, 2),
+            "mem_percent":      round(self._ema_mem, 2),
+            "mem_percent_raw":  round(mem.percent, 2),     # unsmoothed, for display
             "swap_used_mb":     round(swap.used / 1_048_576, 2),
             "swap_percent":     round(swap.percent, 2),
             "cpu_temp_c":       temp,
+            # Extended telemetry (for display cards)
+            "net_sent_mbps":    round(max(0.0, net_sent),  3),
+            "net_recv_mbps":    round(max(0.0, net_recv),  3),
+            "disk_read_mbps":   round(max(0.0, disk_read), 3),
+            "disk_write_mbps":  round(max(0.0, disk_write),3),
+            "uptime_sec":       round(uptime_sec, 0),
+            "process_count":    process_count,
         }
         for i, pct in enumerate(per_core):
             raw[f"cpu_core_{i}"] = round(pct, 2)

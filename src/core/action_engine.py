@@ -1,6 +1,6 @@
 # =============================================================================
 # action_engine.py — Process suspension, whitelist enforcement, undo state machine
-# KNUST Final Year Project — Group 4
+# Logic adapted from Proposal/action_manager.py — KNUST Final Year Project Group 4
 # =============================================================================
 
 import logging
@@ -12,13 +12,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import psutil
-
-_THIS_DIR    = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_DIR = os.path.dirname(_THIS_DIR)
-_COLLECTOR   = os.path.join(_PROJECT_DIR, "Data_collector")
-for _p in (_THIS_DIR, _COLLECTOR):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 from config import PROCESS_WHITELIST, UNDO_TIMEOUT_SEC, CONFIDENCE_THRESHOLD
 
@@ -35,15 +28,15 @@ class SuspendedProcess:
     pid:          int
     name:         str
     suspended_at: float          # monotonic timestamp
-    reason:       str            # e.g. "CPU bottleneck predicted (conf=0.92)"
+    reason:       str
     auto_resume:  bool = True    # resume after UNDO_TIMEOUT_SEC if not manually undone
 
 
 @dataclass
 class ActionResult:
-    """Returned by ActionEngine.evaluate() after each inference cycle."""
+    """Returned by ActionEngine methods after each action."""
     action_taken:    bool   = False
-    action_type:     str    = "none"          # "suspend", "resume", "boost", "none"
+    action_type:     str    = "none"      # "suspend", "resume", "boost", "none"
     affected_pids:   list   = field(default_factory=list)
     affected_names:  list   = field(default_factory=list)
     message:         str    = ""
@@ -59,8 +52,28 @@ class ActionEngine:
     Receives model inference results, decides whether to act, and
     manages the lifecycle of suspended processes.
 
+    Suspension logic: targets highest MEMORY consumers (not CPU) to avoid
+    suspending actively-needed foreground processes.  Whitelist covers both
+    Windows and macOS system processes as well as root/SYSTEM accounts.
+
     Thread-safety: all public methods acquire _lock before mutating state.
     """
+
+    # Comprehensive whitelist — Windows + macOS system-critical processes
+    _WHITELIST = {
+        # ── Windows ─────────────────────────────────────────────────────────
+        "explorer.exe", "svchost.exe", "system", "smss.exe", "csrss.exe",
+        "wininit.exe", "services.exe", "lsass.exe", "winlogon.exe",
+        "taskmgr.exe", "dwm.exe", "spoolsv.exe", "registry", "memory compression",
+        # ── macOS ───────────────────────────────────────────────────────────
+        "kernel_task", "launchd", "windowserver", "sysmond", "logd",
+        "fseventsd", "mds", "mds_stores", "opendirectoryd", "coreservicesuiagent",
+        "dock", "finder", "loginwindow", "activity monitor", "systemuiserver",
+        "coreaudiod", "configd", "diskarbitrationd", "notificationcenter",
+        # ── Python (our own process) ─────────────────────────────────────────
+        "python", "pythonw", "python.exe", "pythonw.exe",
+        "python3", "python3.11", "python3.12",
+    }
 
     def __init__(self):
         self._lock             = threading.Lock()
@@ -73,27 +86,21 @@ class ActionEngine:
 
     def evaluate(self, confidence: float, predicted_cpu: float, predicted_mem: float) -> ActionResult:
         """
-        Called every inference cycle. Decides whether to suspend processes.
-
-        Parameters
-        ----------
-        confidence    : model's bottleneck probability (0.0 – 1.0)
-        predicted_cpu : predicted CPU % at horizon H
-        predicted_mem : predicted memory % at horizon H
+        Called every inference cycle.  Suspends top memory consumers when
+        confidence crosses CONFIDENCE_THRESHOLD.
         """
         result = ActionResult(confidence=confidence)
 
         if confidence < CONFIDENCE_THRESHOLD:
-            result.message = f"Confidence {confidence:.2f} below threshold {CONFIDENCE_THRESHOLD}. No action."
+            result.message = (f"Confidence {confidence:.2f} below threshold "
+                              f"{CONFIDENCE_THRESHOLD}. No action.")
             return result
 
-        reason = (
-            f"Bottleneck predicted (conf={confidence:.2f}, "
-            f"CPU={predicted_cpu:.1f}%, MEM={predicted_mem:.1f}%)"
-        )
-        log.info(f"Action threshold crossed: {reason}")
+        reason = (f"Bottleneck predicted (conf={confidence:.2f}, "
+                  f"CPU={predicted_cpu:.1f}%, MEM={predicted_mem:.1f}%)")
+        log.info("Action threshold crossed: %s", reason)
 
-        targets = self._select_targets()
+        targets = self._select_targets(max_targets=3)
         if not targets:
             result.message = "No suspendable processes found."
             return result
@@ -102,23 +109,24 @@ class ActionEngine:
         for proc in targets:
             if self._suspend_process(proc, reason):
                 suspended_pids.append(proc.pid)
-                suspended_names.append(proc.name())
+                try:
+                    suspended_names.append(proc.name())
+                except Exception:
+                    suspended_names.append(str(proc.pid))
 
         if suspended_pids:
             result.action_taken   = True
             result.action_type    = "suspend"
             result.affected_pids  = suspended_pids
             result.affected_names = suspended_names
-            result.message        = f"Suspended {len(suspended_pids)} process(es): {', '.join(suspended_names)}"
+            result.message        = (f"Suspended {len(suspended_pids)} process(es): "
+                                     f"{', '.join(suspended_names)}")
             log.info(result.message)
 
         return result
 
     def undo(self) -> ActionResult:
-        """
-        Immediately resume ALL currently suspended processes.
-        Called by the 'Undo' button in the dashboard.
-        """
+        """Immediately resume ALL currently suspended processes (Undo button)."""
         with self._lock:
             if not self._suspended:
                 return ActionResult(message="Nothing to undo — no processes are suspended.")
@@ -129,25 +137,27 @@ class ActionEngine:
                     resumed_pids.append(pid)
                     resumed_names.append(record.name)
 
-            return ActionResult(
-                action_taken   = True,
-                action_type    = "resume",
-                affected_pids  = resumed_pids,
-                affected_names = resumed_names,
-                message        = f"Undo: resumed {len(resumed_pids)} process(es): {', '.join(resumed_names)}",
-            )
+        return ActionResult(
+            action_taken   = True,
+            action_type    = "resume",
+            affected_pids  = resumed_pids,
+            affected_names = resumed_names,
+            message        = (f"Undo: resumed {len(resumed_pids)} process(es): "
+                              f"{', '.join(resumed_names)}"),
+        )
 
     def boost(self) -> ActionResult:
         """
-        One-Click Boost:
+        One-Click Boost (from Proposal logic):
         1. Resume any previously suspended processes.
-        2. Suspend the current top CPU consumers (even below the AI threshold).
+        2. Suspend the top memory consumers right now.
         3. Run Python GC to free memory.
+        Always returns action_taken=True so the UI always gets feedback.
         """
         import gc
         gc.collect()
 
-        messages = []
+        messages:  list = []
         all_pids:  list = []
         all_names: list = []
 
@@ -160,24 +170,22 @@ class ActionEngine:
             if undo_res.action_taken:
                 messages.append(f"Resumed: {', '.join(undo_res.affected_names)}")
 
-        # Step 2: suspend top CPU consumers right now
+        # Step 2: suspend top memory consumers now
         targets = self._select_targets(max_targets=3)
-        suspended_pids, suspended_names = [], []
         for proc in targets:
             if self._suspend_process(proc, "Manual One-Click Boost"):
-                suspended_pids.append(proc.pid)
-                suspended_names.append(proc.name())
+                try:
+                    name = proc.name()
+                except Exception:
+                    name = str(proc.pid)
+                all_pids.append(proc.pid)
+                all_names.append(name)
 
-        if suspended_pids:
-            all_pids  += suspended_pids
-            all_names += suspended_names
-            messages.append(f"Suspended: {', '.join(suspended_names)}")
+        if all_names:
+            messages.append(f"Suspended: {', '.join(all_names)}")
 
-        if not messages:
-            msg = "Boost: memory freed (GC). No suspendable processes found."
-        else:
-            msg = "Boost: " + " | ".join(messages)
-
+        msg = "Boost: " + (" | ".join(messages) if messages
+                           else "Memory freed (GC). No suspendable processes found.")
         log.info(msg)
         return ActionResult(
             action_taken   = True,
@@ -199,70 +207,102 @@ class ActionEngine:
 
     # ── Internal helpers ────────────────────────────────────────────────────
 
+    def _is_safe_to_suspend(self, proc: psutil.Process) -> bool:
+        """
+        Mirrors proposal action_manager._is_safe_to_suspend:
+        checks whitelist AND skips root/SYSTEM account processes.
+        """
+        try:
+            name = proc.name().lower()
+            if name in self._WHITELIST:
+                return False
+
+            # Also check the config whitelist (may contain app-specific entries)
+            if name in {w.lower() for w in PROCESS_WHITELIST}:
+                return False
+
+            # Skip system account processes (same check as proposal)
+            username = ""
+            try:
+                username = proc.username() or ""
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                return False
+
+            if username.lower() in ("root", "system", "local service",
+                                    "network service", "_windowserver", "_spotlight"):
+                return False
+
+            # Skip already-suspended processes
+            with self._lock:
+                if proc.pid in self._suspended:
+                    return False
+
+            # Skip zombie / dead processes
+            status = proc.status()
+            if status in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
+                return False
+
+            return True
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return False
+
     def _select_targets(self, max_targets: int = 3) -> list:
         """
         Identify up to max_targets suspendable processes.
-        Priority: highest CPU consumers that are not whitelisted and not
-        already suspended.
+        Sorted by MEMORY (RSS) descending — mirrors proposal sort order.
+        Avoids suspending zero-CPU idle processes that won't help.
         """
         candidates = []
-        with self._lock:
-            already_suspended = set(self._suspended.keys())
-
         try:
-            for proc in psutil.process_iter(["pid", "name", "cpu_percent", "status"]):
+            for proc in psutil.process_iter(["pid", "name", "memory_info",
+                                             "cpu_percent", "username", "status"]):
                 try:
-                    info = proc.info
-                    name_lower = (info["name"] or "").lower()
-
-                    # Skip whitelisted processes
-                    if name_lower in PROCESS_WHITELIST:
+                    if not self._is_safe_to_suspend(proc):
                         continue
-                    # Skip already suspended
-                    if info["pid"] in already_suspended:
-                        continue
-                    # Skip zombie / dead processes
-                    if info["status"] in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
-                        continue
-
-                    candidates.append((info["cpu_percent"] or 0.0, proc))
+                    mem = proc.info.get("memory_info")
+                    rss = mem.rss if mem else 0
+                    candidates.append((rss, proc))
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
         except Exception as exc:
-            log.error(f"Error iterating processes: {exc}")
+            log.error("Error iterating processes: %s", exc)
             return []
 
-        # Sort descending by CPU usage; return top N
+        # Sort by memory descending (proposal approach)
         candidates.sort(key=lambda x: x[0], reverse=True)
-        return [proc for _, proc in candidates[:max_targets] if candidates]
+        return [proc for _, proc in candidates[:max_targets]]
 
     def _suspend_process(self, proc: psutil.Process, reason: str) -> bool:
         try:
+            name = proc.name()
+            mem  = proc.memory_info().rss / (1024 * 1024)
+            mem_str = f"{mem/1024:.1f}GB" if mem > 1024 else f"{mem:.1f}MB"
             proc.suspend()
             with self._lock:
                 self._suspended[proc.pid] = SuspendedProcess(
                     pid          = proc.pid,
-                    name         = proc.name(),
+                    name         = f"{name} ({mem_str})",
                     suspended_at = time.monotonic(),
                     reason       = reason,
                 )
-            log.debug(f"Suspended PID {proc.pid} ({proc.name()})")
+            log.info("Suspended PID %d (%s) using %s", proc.pid, name, mem_str)
             return True
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-            log.warning(f"Could not suspend PID {proc.pid}: {exc}")
+            log.warning("Could not suspend PID %d: %s", proc.pid, exc)
             return False
 
     def _resume_process(self, pid: int) -> bool:
-        """Resume a process by PID. Must be called with _lock held for state mutation."""
+        """Resume a process by PID. Must be called with _lock held."""
         try:
             proc = psutil.Process(pid)
             proc.resume()
             self._suspended.pop(pid, None)
-            log.debug(f"Resumed PID {pid}")
+            log.info("Resumed PID %d", pid)
             return True
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-            log.warning(f"Could not resume PID {pid}: {exc}")
-            self._suspended.pop(pid, None)   # remove stale record
+            log.warning("Could not resume PID %d: %s", pid, exc)
+            self._suspended.pop(pid, None)
             return False
 
     # ── Auto-resume watchdog ─────────────────────────────────────────────────
@@ -276,10 +316,7 @@ class ActionEngine:
         self._auto_resume_thread.start()
 
     def _watchdog_loop(self):
-        """
-        Background loop that automatically resumes processes that have been
-        suspended longer than UNDO_TIMEOUT_SEC (default: 5 minutes).
-        """
+        """Auto-resume processes suspended longer than UNDO_TIMEOUT_SEC."""
         while not self._stop_event.is_set():
             now = time.monotonic()
             with self._lock:
@@ -288,8 +325,7 @@ class ActionEngine:
                     if rec.auto_resume and (now - rec.suspended_at) >= UNDO_TIMEOUT_SEC
                 ]
             for pid in timed_out:
-                log.info(f"Auto-resuming PID {pid} (timeout {UNDO_TIMEOUT_SEC}s reached)")
+                log.info("Auto-resuming PID %d (timeout %ds reached)", pid, UNDO_TIMEOUT_SEC)
                 with self._lock:
                     self._resume_process(pid)
-
-            time.sleep(10)   # check every 10 seconds
+            time.sleep(10)

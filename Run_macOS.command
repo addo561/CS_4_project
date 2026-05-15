@@ -25,4 +25,4 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-python3 files/main.py
+python3 src/main.py

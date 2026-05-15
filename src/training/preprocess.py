@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     RAW_CSV, CLEAN_CSV, SCALER_PATH, FEATURE_COLS,
     WINDOW_SIZE, STEP_SIZE, LABEL_HORIZON,

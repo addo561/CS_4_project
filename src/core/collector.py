@@ -27,7 +27,6 @@ import psutil
 # ---------------------------------------------------------------------------
 # Ensure project root is on path when run directly
 # ---------------------------------------------------------------------------
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     DATA_DIR, RAW_CSV, POLL_INTERVAL_SEC,
     QUEUE_MAX_SIZE, FLUSH_EVERY_N, TEMP_FALLBACK,

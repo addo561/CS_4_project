@@ -12,17 +12,16 @@ ROOT = os.path.dirname(os.path.abspath(SPEC))   # Final_year/
 # ── Source files to add as data (non-Python assets) ──────────────────────────
 added_files = [
     # Model + scaler
-    (os.path.join(ROOT, "Data_collector", "models"), "models"),
+    (os.path.join(ROOT, "src", "models"), "models"),
     # App icon
-    (os.path.join(ROOT, "assets", "icon.icns"),  "assets"),
-    (os.path.join(ROOT, "assets", "icon_proper.png"), "assets"),
+    (os.path.join(ROOT, "src", "assets", "icon.icns"),  "assets"),
+    (os.path.join(ROOT, "src", "assets", "icon_proper.png"), "assets"),
 ]
 
 # ── Hidden imports PyInstaller misses ─────────────────────────────────────────
 hidden = [
     # Our own modules
-    "pipeline", "action_engine", "notifier", "config",
-    "gru_model",
+    "core.pipeline", "core.action_engine", "core.notifier", "config",
     # psutil
     "psutil", "psutil._psmacosx", "psutil._common",
     # sklearn
@@ -44,12 +43,10 @@ hidden = [
 ]
 
 a = Analysis(
-    [os.path.join(ROOT, "files", "main.py")],
+    [os.path.join(ROOT, "src", "main.py")],
     pathex=[
         ROOT,
-        os.path.join(ROOT, "files"),
-        os.path.join(ROOT, "data_pipeline"),
-        os.path.join(ROOT, "Data_collector"),
+        os.path.join(ROOT, "src"),
     ],
     binaries=[],
     datas=added_files,
@@ -59,17 +56,31 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         # Exclude heavy torch bits we don't need
+        "torch",
         "torch.distributed",
         "torch.cuda",
         "torchvision",
         "torchaudio",
         "tensorflow",
         "tensorboard",
+        "pandas",
         "matplotlib",
         "IPython",
         "notebook",
         "jupyter",
         "pytest",
+        # Exclude heavy unused PyQt6 web and mobile frameworks
+        "PyQt6.QtWebEngine",
+        "PyQt6.QtWebEngineCore",
+        "PyQt6.QtWebEngineWidgets",
+        "PyQt6.QtQml",
+        "PyQt6.QtQuick",
+        "PyQt6.QtQuickWidgets",
+        "PyQt6.QtNetwork",
+        "PyQt6.QtSql",
+        "PyQt6.QtTest",
+        "PyQt6.QtBluetooth",
+        "PyQt6.QtMultimedia",
     ],
     noarchive=False,
     optimize=1,
@@ -92,7 +103,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=os.path.join(ROOT, "assets", "icon.icns"),
+    icon=os.path.join(ROOT, "src", "assets", "icon.icns"),
 )
 
 coll = COLLECT(
@@ -108,7 +119,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="System Resource Optimizer.app",
-    icon=os.path.join(ROOT, "assets", "icon.icns"),
+    icon=os.path.join(ROOT, "src", "assets", "icon.icns"),
     bundle_identifier="com.knust.group4.systemresourceoptimizer",
     info_plist={
         "CFBundleName":             "System Resource Optimizer",
