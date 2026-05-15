@@ -49,16 +49,18 @@ jobs:
       - name: Build .app with PyInstaller
         run: pyinstaller SystemResourceOptimizer.spec --clean -y
 
-      - name: Zip the .app
+      - name: Create DMG
         run: |
           cd dist
-          zip -r "System_Resource_Optimizer_macOS.zip" "System Resource Optimizer.app"
+          hdiutil create -volname "System Resource Optimizer" \
+            -srcfolder "System Resource Optimizer.app" \
+            -ov -format UDZO "System_Resource_Optimizer.dmg"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macOS-App
-          path: dist/System_Resource_Optimizer_macOS.zip
+          name: macOS-DMG
+          path: dist/System_Resource_Optimizer.dmg
           retention-days: 30
 
   # ────────────────────────────────────────────────────────────────────────────
@@ -83,17 +85,11 @@ jobs:
       - name: Build .exe with PyInstaller
         run: pyinstaller SystemResourceOptimizer.spec --clean -y
 
-      - name: Zip the .exe folder
-        run: |
-          Compress-Archive `
-            -Path "dist\SystemResourceOptimizer\*" `
-            -DestinationPath "dist\System_Resource_Optimizer_Windows.zip"
-
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: Windows-Exe
-          path: dist\System_Resource_Optimizer_Windows.zip
+          path: dist/SystemResourceOptimizer.exe
           retention-days: 30
 
   # ────────────────────────────────────────────────────────────────────────────
@@ -110,7 +106,7 @@ jobs:
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: macOS-App
+          name: macOS-DMG
           path: release/
 
       - name: Download Windows artifact
@@ -123,17 +119,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/System_Resource_Optimizer_macOS.zip
-            release/System_Resource_Optimizer_Windows.zip
+            release/System_Resource_Optimizer.dmg
+            release/SystemResourceOptimizer.exe
           body: |
             ## System Resource Optimizer — ${{ github.ref_name }}
 
             ### Downloads
             | Platform | File |
             |---|---|
-            | 🍎 macOS | `System_Resource_Optimizer_macOS.zip` → unzip → double-click the `.app` |
-            | 🪟 Windows | `System_Resource_Optimizer_Windows.zip` → unzip → run `SystemResourceOptimizer.exe` |
+            | 🍎 macOS | `System_Resource_Optimizer.dmg` → Open → Drag to Applications |
+            | 🪟 Windows | `SystemResourceOptimizer.exe` → Run directly |
 
             ### First Launch
-            - **macOS**: Right-click the `.app` → Open → Open (bypasses Gatekeeper)
-            - **Windows**: Double-click `.exe` (allow firewall if prompted)
+            - **macOS**: Right-click the `.dmg` → Open. After dragging to Applications, Right-click the app → Open → Open (bypasses Gatekeeper).
+            - **Windows**: Double-click `.exe`. (Allow Windows Defender/Firewall if prompted).

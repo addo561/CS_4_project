@@ -86,11 +86,14 @@ if platform.system() == "Windows":
     # On Windows, use the high-res PNG; PyInstaller/Pillow will convert it to ICO
     _ICON = os.path.join(ROOT, "src", "assets", "icon_proper.png")
 
+is_win = platform.system() == "Windows"
+
 exe = EXE(
     pyz,
     a.scripts,
-    [],
-    exclude_binaries=True,
+    a.binaries if is_win else [],
+    a.zipfiles if is_win else [],
+    a.datas    if is_win else [],
     name="SystemResourceOptimizer",
     debug=False,
     bootloader_ignore_signals=False,
@@ -98,21 +101,23 @@ exe = EXE(
     upx=False,
     console=False,          # no terminal window
     disable_windowed_traceback=False,
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon=_ICON,
 )
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="SystemResourceOptimizer",
-)
+if not is_win:
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name="SystemResourceOptimizer",
+    )
 
 if platform.system() == 'Darwin':
     app = BUNDLE(
