@@ -7,7 +7,7 @@ REM =============================================================
 SET SCRIPT_DIR=%~dp0
 
 REM Try the pre-built .exe first
-SET EXE=%SCRIPT_DIR%dist\SystemResourceOptimizer\SystemResourceOptimizer.exe
+SET EXE=%SCRIPT_DIR%dist\SystemResourceOptimizer.exe
 IF EXIST "%EXE%" (
     echo Launching System Resource Optimizer...
     start "" "%EXE%"
