@@ -19,6 +19,7 @@ added_files = [
     (os.path.join(ROOT, "src", "assets", "icon.icns"),  "assets"),
     (os.path.join(ROOT, "src", "assets", "icon_proper.png"), "assets"),
 ]
+added_files += collect_data_files("flet")
 
 # ── Hidden imports PyInstaller misses ─────────────────────────────────────────
 hidden = [
@@ -36,6 +37,7 @@ hidden = [
     # plyer
     "plyer", "plyer.platforms.win.notification", "plyer.platforms.macosx.notification",
 ]
+hidden += collect_submodules("flet")
 
 # ── Analysis ─────────────────────────────────────────────────────────────────
 a = Analysis(
