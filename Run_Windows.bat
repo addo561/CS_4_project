@@ -18,6 +18,13 @@ REM Fallback: run from Python source
 echo App .exe not found -- running from source...
 cd /d "%SCRIPT_DIR%"
 
+IF EXIST "%SCRIPT_DIR%venv\Scripts\python.exe" (
+    echo Found virtual environment -- running app with venv Python...
+    "%SCRIPT_DIR%venv\Scripts\python.exe" src\main.py
+    pause
+    exit /b 0
+)
+
 WHERE python >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
     echo ERROR: Python not found. Install Python 3.11 from python.org

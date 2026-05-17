@@ -19,6 +19,12 @@ fi
 echo "App bundle not found — running from source ..."
 cd "$SCRIPT_DIR"
 
+if [ -f "$SCRIPT_DIR/venv/bin/python" ]; then
+    echo "Found virtual environment — running app with venv Python ..."
+    "$SCRIPT_DIR/venv/bin/python" src/main.py
+    exit 0
+fi
+
 # Check Python
 if ! command -v python3 &>/dev/null; then
     osascript -e 'display alert "Python 3 not found" message "Please install Python 3.11 from python.org, then run: pip3 install -r requirements.txt"'
