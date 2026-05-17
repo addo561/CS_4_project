@@ -32,7 +32,7 @@ MODEL_PATH  = os.path.join(MODEL_DIR, "gru_quantized.onnx")
 import pathlib
 _LOCAL_DIR       = os.path.join(pathlib.Path.home(), ".sro_optimizer")
 LOCAL_SCALER_DIR = _LOCAL_DIR
-LOCAL_SCALER_PATH = os.path.join(_LOCAL_DIR, "scaler_local.pkl")
+LOCAL_SCALER_PATH = os.path.join(_LOCAL_DIR, "scaler_local_v2.pkl")
 CALIBRATION_SECONDS = 90   # seconds of idle data to collect on first launch
 
 # ── Data Collection ───────────────────────────────────────────────────────────

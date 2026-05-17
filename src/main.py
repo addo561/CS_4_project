@@ -816,7 +816,7 @@ def build_settings_view(autopilot_status: ft.Text) -> ft.Column:
                                 ft.Column(
                                     [
                                         body_text("Software Version", size=11, color=MUTED),
-                                        body_text("v2.3.1 (Stable)", size=13, weight=ft.FontWeight.W_600, color=ACCENT),
+                                        body_text("v2.3.2 (Stable)", size=13, weight=ft.FontWeight.W_600, color=ACCENT),
                                     ],
                                     col={"xs": 6, "md": 3},
                                 ),
@@ -1342,8 +1342,6 @@ def run_app(page: ft.Page) -> None:
             refresh_suspended()
 
     async def flush_ui() -> None:
-        nonlocal flush_scheduled
-        flush_scheduled = False
         with pending_lock:
             calibs = pending_calib[:]
             pending_calib.clear()
@@ -1371,6 +1369,8 @@ def run_app(page: ft.Page) -> None:
 
         ui.sync_charts()
         page.update()
+        nonlocal flush_scheduled
+        flush_scheduled = False
 
     def schedule_flush() -> None:
         nonlocal flush_scheduled
@@ -1381,23 +1381,26 @@ def run_app(page: ft.Page) -> None:
 
     def poll_queues() -> None:
         while True:
-            dirty = False
             try:
-                while True:
-                    with pending_lock:
-                        pending_calib.append(calib_q.get_nowait())
-                    dirty = True
-            except Empty:
-                pass
-            try:
-                while True:
-                    with pending_lock:
-                        pending_items.append(result_q.get_nowait())
-                    dirty = True
-            except Empty:
-                pass
-            if dirty:
-                schedule_flush()
+                dirty = False
+                try:
+                    while True:
+                        with pending_lock:
+                            pending_calib.append(calib_q.get_nowait())
+                        dirty = True
+                except Empty:
+                    pass
+                try:
+                    while True:
+                        with pending_lock:
+                            pending_items.append(result_q.get_nowait())
+                        dirty = True
+                except Empty:
+                    pass
+                if dirty:
+                    schedule_flush()
+            except Exception as exc:
+                print(f"Error polling queues: {exc}", flush=True)
             time.sleep(0.1)
 
     def poll_processes() -> None:
@@ -1465,8 +1468,10 @@ def run_app(page: ft.Page) -> None:
     page.update()
 
     def on_window_event(e) -> None:
+        nonlocal pipeline
         if e.data == "close" and pipeline:
             pipeline.stop()
+            pipeline = None
 
     page.window.on_event = on_window_event
 
