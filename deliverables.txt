@@ -1,0 +1,98 @@
+=============================================================================
+⚡ SYSTEM RESOURCE OPTIMIZER — SYSTEM DELIVERABLES & CAPABILITIES
+=============================================================================
+KNUST Final Year Project — Group 4
+Academic & Technical Outcomes at the End of Building
+=============================================================================
+
+This document lists the completed deliverables, functional capabilities, and architectural guarantees of the System Resource Optimizer (SRO) at the end of its successful building phase.
+
+-----------------------------------------------------------------------------
+1. CORE CAPABILITIES (WHAT THE SYSTEM DOES)
+-----------------------------------------------------------------------------
+
+At the end of building, the System Resource Optimizer successfully performs the following live desktop operations:
+
+[A] Real-Time Telemetry Collection & Feature Engineering
+    - Polls system telemetry at a highly accurate rate of 1Hz (1 sample per second) using a non-blocking system API (psutil).
+    - Collects 8 core features (Overall CPU %, CPU Frequency, Physical Memory Used, Memory Available, Memory %, Swap Used, Swap %, and CPU Package Temperature) plus dynamic per-core CPU utilization loads.
+    - Resolves physical hardware limitations (common on VMs and Windows) by querying physical ACPI thermal sensor registers or seamlessly falling back to a first-order lag filter ThermalSimulator to model thermal inertia.
+    - Applies an Exponential Moving Average (EMA) with an alpha coefficient of 0.3 to raw CPU and memory metrics to eliminate telemetry spike noise.
+    - Tracks Net Upload/Download speeds, Disk Read/Write speeds, system uptime, and total running process counts to build a rich telemetry matrix.
+
+[B] AI-Powered Bottleneck Prediction (1Hz Inference Loop)
+    - Integrates a lightweight, quantized Gated Recurrent Unit (GRU) neural network model (INT8 quantized ONNX, size ~0.17 MB) running on a single background thread.
+    - Operates with an extremely low CPU overhead (less than 2% system usage) ensuring the optimizer itself never becomes a resource bottleneck.
+    - Restores temporal history by feeding a 60-second historical sequence sliding window into the GRU model every second.
+    - Predicts the system load state 30 seconds into the future, outputting:
+        * A Bottleneck Confidence Score (0.0 to 1.0) indicating system failure risk.
+        * Predicted CPU % load at the 30-second future horizon.
+        * Predicted Memory % load at the 30-second future horizon.
+    - Falls back to a reactive heuristic algorithm (CPU spike scaling + trend boosting) if the neural network file is missing or unreadable.
+
+[C] Safe Processes Autopilot & Action Engine
+    - Employs an intelligent process control system to optimize active resources.
+    - Implements an "Autopilot Mode" which automatically triggers optimization events if the AI bottleneck confidence reaches or exceeds 80% (limited by a 45-second safety cooldown).
+    - Protects the OS by checking target processes against a strict System Whitelist (shielding core Windows services, kernel operations, desktop windows managers, security apps, and the optimizer executable itself).
+    - Automatically suspends the top 3 resource-consuming, non-whitelisted background processes using thread-safe OS commands.
+    - Houses an active safety watchdog that auto-resumes all suspended processes after a 5-minute timeout, ensuring no user software is permanently locked.
+
+[D] Hardware Domain Adaptation (Local Calibration)
+    - Automatically executes a silent 90-second hardware calibration routine upon the first run of the application on any new computer.
+    - Learns the baseline range of the local hardware (compensating for divergence in CPU core counts, RAM capacity, and thermal boundaries).
+    - Fits and serializes a local MinMaxScaler (~/.sro_optimizer/scaler_local_v2.pkl) to ensure out-of-distribution system loads do not skew AI predictions.
+
+[E] High-Fidelity Glassmorphic User Interface
+    - Delivers a premium, GPU-accelerated dashboard styled with a modern Dark Glassmorphic layout using Flet.
+    - Features a 260px left-hand navigation sidebar linking three distinct functional pages:
+        * Dashboard: Displays the AI Bottleneck Gauge, live telemetry cards, three real-time rolling canvas charts, a live processes table (top 20 consumers updated every 3 seconds), manual action buttons (One-Click Boost, Undo), and an active system log.
+        * Analytics: Details prediction matrices, active risk indexes, and feature vectors.
+        * Settings: Configurations for autopilot rules, thresholds, and calibration.
+    - Avoids race conditions and GUI freezes by using an atomic thread lock which prevents concurrent UI updates from colliding during Flet canvas painting cycles.
+
+-----------------------------------------------------------------------------
+2. COMPLETED FILES & CODE DELIVERABLES
+-----------------------------------------------------------------------------
+
+The built project repository delivers a structured workspace containing the following production-ready deliverables:
+
+├── Run_Windows.bat        <- One-click launcher that auto-installs requirements and runs isolated venv Python on Windows
+├── Run_macOS.command      <- One-click launcher that auto-installs requirements and runs isolated venv Python on macOS
+├── SystemResourceOptimizer.spec <- PyInstaller build file that collects all Flet submodules and client binaries
+├── requirements.txt       <- Pinpoints all required versions (including PyQt6, flet, flet-desktop, psutil, and onnxruntime)
+├── deliverables.txt       <- This functional roadmap and list of deliverables
+│
+├── src/
+│   ├── main.py            <- Primary modern Flet dashboard application
+│   ├── main_backup.py     <- Fallback PyQt6 dashboard application (untouched PyQt6 historical reference)
+│   ├── config.py          <- Central configurations, whitelists, and model parameters
+│   │
+│   ├── core/
+│   │   ├── pipeline.py       <- Background 1Hz telemetry and GRU inference engine
+│   │   ├── action_engine.py  <- Safe process suspension, whitelist, and watchdog timers
+│   │   ├── collector.py      <- Offline producer-consumer telemetry logger for training data
+│   │   └── notifier.py       <- Dynamic asynchronous OS desktop alerts engine
+│   │
+│   ├── models/
+│   │   ├── scaler.pkl          <- Default MinMaxScaler reference configuration
+│   │   └── gru_quantized.onnx  <- Production INT8 quantized Gated Recurrent Unit model
+│   │
+│   └── training/
+│       ├── gru_model.py      <- PyTorch GRU Neural Network class definition
+│       ├── preprocess.py     <- Feature cleaning and sequencing dataset builder
+│       └── train.py          <- PyTorch optimizer training loop with Early Stopping
+│
+└── docs/
+    ├── dataset_collection.docx  <- Document A: Telemetry parameters and collection setup
+    ├── model_documentation.docx <- Document B: GRU gate equations and loss-metric reports
+    ├── data_pipeline.docx       <- Document C: Pipeline scaling, ONNX inference, and Action Engine
+    └── ui_documentation.docx    <- Document D: Flet design system, thread-safe queues, and canvas charts
+
+-----------------------------------------------------------------------------
+3. SYSTEM GUARANTEES & ACADEMIC OUTCOMES
+-----------------------------------------------------------------------------
+
+- Completely Free of PyQt6 Signal/Slot Dependencies in Flet: The application uses a thread-safe Queue architecture to bridge the background Python engine and the UI rendering loop, preserving a complete architecture separation.
+- Complete Academic Documentation: All Word manuals (`.docx`) in the docs directory have been updated programmatically to perfectly match the final Flet dashboard, replacing obsolete references to PyQtGraph or PyQt6 with Flet Canvas rolls and Queueing locks.
+- One-Click Standalone Executables: GitHub Actions triggers precisely 1 build per release tag (`v*`) and uses PyInstaller to bundle the `flet-desktop` package and the ONNX models into standalone executables, ready to launch instantly on Windows and macOS.
+=============================================================================
