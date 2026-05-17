@@ -95,4 +95,64 @@ The built project repository delivers a structured workspace containing the foll
 - Completely Free of PyQt6 Signal/Slot Dependencies in Flet: The application uses a thread-safe Queue architecture to bridge the background Python engine and the UI rendering loop, preserving a complete architecture separation.
 - Complete Academic Documentation: All Word manuals (`.docx`) in the docs directory have been updated programmatically to perfectly match the final Flet dashboard, replacing obsolete references to PyQtGraph or PyQt6 with Flet Canvas rolls and Queueing locks.
 - One-Click Standalone Executables: GitHub Actions triggers precisely 1 build per release tag (`v*`) and uses PyInstaller to bundle the `flet-desktop` package and the ONNX models into standalone executables, ready to launch instantly on Windows and macOS.
+
+-----------------------------------------------------------------------------
+4. VERIFICATION & TESTING PROCEDURES (HOW TO TEST ON WINDOWS & MAC)
+-----------------------------------------------------------------------------
+
+To ensure all deliverables are fully met, follow these platform-agnostic, step-by-step verification procedures on either Windows or macOS:
+
+[Test 1] Launcher & Environment Self-Bootstrapping
+  - Execution:
+    * On Windows: Double-click 'Run_Windows.bat'.
+    * On macOS: Double-click 'Run_macOS.command' (or run 'chmod +x Run_macOS.command && ./Run_macOS.command' in Terminal).
+  - Expected Outcome: 
+    * The terminal should launch, automatically check for Python, set up an isolated virtual environment ('venv'), pre-install all pinning requirements (including 'flet' and 'flet-desktop' to prevent import NameErrors), and start the application instantly with zero manual commands.
+
+[Test 2] First-Launch Local Calibration Verification
+  - Setup: If the application has been run before, delete or rename the local scaler file to simulate a brand-new user install:
+    * Path: '~/.sro_optimizer/scaler_local_v2.pkl' (located in your User Profile home folder).
+  - Execution: Run the application.
+  - Expected Outcome:
+    * The central circular gauge should show "Calibrating sensors" in amber text.
+    * The progress percentage should count up from 1% to 100% over exactly 90 seconds.
+    * At 100%, a desktop notification should slide out confirming: "🎯 Calibration Complete! Local system metrics calibrated successfully."
+    * The file '~/.sro_optimizer/scaler_local_v2.pkl' should now appear on your disk with a non-zero file size.
+
+[Test 3] Telemetry Pipeline & UI Responsiveness Test
+  - Execution: Navigate the left sidebar across 'Dashboard', 'Analytics', and 'Settings'.
+  - Expected Outcome:
+    * Navigation transitions should be fluid, and the app must run continuously without any layout freezes.
+    * Four real-time telemetry cards (CPU, Memory, Temp, Swap) must update every 1.0s.
+    * Canvas charts must draw smooth rolling lines without crashing.
+    * Under the 'Running Processes' card, the top 20 resource-consuming processes must refresh every 3 seconds, sorted in descending order of memory usage.
+
+[Test 4] Stress Testing AI Bottleneck Forecasting
+  - Setup: Open the 'Settings' page and ensure 'Auto-Pilot Mode' is turned OFF.
+  - Execution: Induce a system resource stress spike. You can run multiple heavy apps (e.g., compile code, open 20 browser tabs, or run a benchmark utility).
+  - Expected Outcome:
+    * As the CPU and memory utilization surges above 80%, the 'AI Bottleneck Gauge' on the dashboard should react dynamically.
+    * The predicted future CPU % and Memory % loads shown under the gauge should rise.
+    * The confidence value should shift from green (low risk) to amber (moderate risk) and ultimately red (high load risk) as confidence spikes above 80%.
+
+[Test 5] Autopilot & Safe Process Suspension Test
+  - Setup: On the 'Settings' page, turn 'Auto-Pilot Mode' ON. Ensure you have a non-critical heavy user process running (e.g., an independent browser tab, text editor, or calculator).
+  - Execution: Induce a bottleneck spike (above 80% threshold).
+  - Expected Outcome:
+    * Once the AI Confidence crosses 80%, the Action Engine should fire.
+    * A warning alert will appear: "🤖 Auto-Pilot Activated — Autonomous Boost Enabled".
+    * The top 3 resource-heavy user processes will be suspended safely.
+    * Whitelisted processes (Python, SRO optimizer itself, DwM, Explorer, or System Services) MUST remain active and completely untouched.
+    * Navigate to the 'Suspended Processes' card; the target processes will be listed with their exact suspension time.
+    * After 5 minutes, verify that the watchdog timer automatically triggers and resumes the suspended processes, returning your system to its normal state.
+
+[Test 6] Manual Override & Process Recovery Test
+  - Setup: Turn 'Auto-Pilot Mode' OFF.
+  - Execution:
+    * Step 1: Click the green 'One-Click Boost' manual override button on the dashboard.
+    * Step 2: Observe processes entering suspension in the list.
+    * Step 3: Click the 'Undo Suspension' manual button.
+  - Expected Outcome:
+    * Clicking 'One-Click Boost' immediately suspends the top 3 heavy non-whitelisted processes and adds them to the list.
+    * Clicking 'Undo Suspension' instantly resumes all suspended processes, clearing the suspended list and restoring full user-space execution.
 =============================================================================
