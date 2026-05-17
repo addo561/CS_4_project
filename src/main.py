@@ -816,7 +816,7 @@ def build_settings_view(autopilot_status: ft.Text) -> ft.Column:
                                 ft.Column(
                                     [
                                         body_text("Software Version", size=11, color=MUTED),
-                                        body_text("v2.3.2 (Stable)", size=13, weight=ft.FontWeight.W_600, color=ACCENT),
+                                        body_text("v2.3.3 (Stable)", size=13, weight=ft.FontWeight.W_600, color=ACCENT),
                                     ],
                                     col={"xs": 6, "md": 3},
                                 ),
