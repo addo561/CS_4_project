@@ -30,6 +30,7 @@ from config import (
 )
 from core.action_engine import ActionEngine, ActionResult
 from core.notifier import Notifier
+from core.collector import ThermalSimulator
 
 log = logging.getLogger("pipeline")
 
@@ -230,6 +231,7 @@ class Pipeline:
         self._engine       = InferenceEngine(model_path)
         self._action       = ActionEngine()
         self._notifier     = Notifier()
+        self._thermal_sim  = ThermalSimulator()
         self._window       = collections.deque(maxlen=WINDOW_SIZE)
         self._stop_event   = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -437,7 +439,7 @@ class Pipeline:
         freq     = psutil.cpu_freq()
         mem      = psutil.virtual_memory()
         swap     = psutil.swap_memory()
-        temp     = self._get_temp()
+        temp     = self._thermal_sim.get_simulated_temp(cpu_pct, mem.percent)
 
         # ── EMA smoothing (proposal alpha=0.3) ────────────────────────────────
         alpha = 0.3

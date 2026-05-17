@@ -1,184 +1,167 @@
 # ⚡ System Resource Optimizer
 ### KNUST Final Year Project — Group 4
 
-An AI-powered desktop application that monitors your computer's resources in real time, predicts performance bottlenecks before they happen, and automatically optimises your system — all from a single dashboard.
+An AI-powered desktop application that monitors your computer's resources in real time, predicts performance bottlenecks before they happen, and automatically optimises your system — all from a modern, responsive dashboard.
 
 ---
 
 ## 🚀 What Happens When You Open the App
 
-### 1. The Dashboard Launches
-The moment you double-click the app, a dark-themed dashboard opens with four sections:
+### 1. The Flet Dashboard Launches
+The moment you run the application, a sleek dark-themed dashboard built with **Flet** opens. It is organized into three distinct pages accessible from a responsive left-hand navigation sidebar:
 
-- **Metric Cards** (top-left) — live CPU %, Memory %, Temperature, and Swap usage, each with a colour-coded progress bar that turns orange at 70% and red at 90%.
-- **Real-Time Charts** (centre-left) — three rolling line graphs updating every second showing the last 2 minutes of CPU, Memory, and Temperature history.
-- **Process Table** (bottom-left) — the top 20 running processes by CPU usage, refreshed every 3 seconds. Suspended processes are highlighted in red.
-- **AI Prediction Panel** (right sidebar) — the GRU model's current bottleneck confidence score (0–100%), with a description of what it expects your system to do in the next 30 seconds.
-
-### 2. The Pipeline Starts Automatically
-In the background, the app immediately begins:
-1. **Collecting** — polling your CPU, memory, temperature, and per-core metrics every 1 second using `psutil`.
-2. **Scaling** — normalising each reading using the fitted MinMax scaler (`models/scaler.pkl`).
-3. **Windowing** — accumulating 60 consecutive readings (60 seconds) into a rolling input window.
-4. **Predicting** — once 60 seconds of data are collected, the GRU model (`models/gru_quantized.onnx`) runs inference every second, outputting:
-   - A **bottleneck probability** (0–1) — how likely a CPU/memory spike is in the next 30 seconds.
-   - A **predicted CPU %** and **Memory %** at the 30-second horizon.
-
-> **During the first 60 seconds** the AI panel shows 0% confidence — this is normal. The model needs its full 60-second window before making predictions.
-
-### 3. The Status Indicator Updates
-The coloured dot in the top-right corner reflects the system state:
-- 🟢 **Green "Live"** — system healthy, no action needed
-- 🟡 **Orange "Warning"** — moderate risk detected, monitoring closely
-- 🔴 **Red "Action Mode"** — high confidence bottleneck predicted, optimizer is ready to act
-
-### 4. The AI Takes Action (if confidence ≥ 80%)
-When the model's confidence crosses the 80% threshold, the action engine automatically:
-1. Identifies the top 3 CPU-consuming processes that are safe to suspend (non-whitelisted system processes).
-2. Suspends them using `psutil`'s `proc.suspend()`.
-3. Logs the action in the **Event Log** with a timestamp.
-4. Enables the **Undo** button so you can instantly restore any suspended process.
-5. Auto-resumes all suspended processes after **5 minutes** even if you don't click Undo.
+- **Dashboard Page**:
+  - **AI Circular Gauge Ring** (top-left) — Displays the GRU model's real-time bottleneck confidence score (0–100%) with dynamic, severity-based color grading (Green < 65%, Amber 65–84%, Red ≥ 85%) and detailed natural-language insights.
+  - **Metric Tiles Grid** (top-right) — Displays live CPU %, Memory %, Temperature, and Swap usage with color-coded progress bars.
+  - **Real-Time Rolling Charts** (middle) — Three GPU-accelerated charts rendered via Flet Canvas updating every second, displaying the last 2 minutes of CPU, Memory, and Temperature history.
+  - **Running Processes DataTable** (bottom) — Shows the top 20 resource-consuming processes updated every 3 seconds.
+  - **Right Control Rail** — Groups manual actions (One-Click Boost, Undo), Auto-Pilot toggle, Active Suspended process list, and the event-driven active system log.
+- **Analytics Page**: Surfaces in-depth system metrics, detailed classification labels, risk parameters, and active model feature sets.
+- **Settings Page**: Houses engine parameter indicators, calibration settings, and autopilot policy guidelines.
 
 ---
 
-## 🎛️ Controls
+## 🧠 Inference vs. Training on Launch: How it Runs
 
-| Button | What It Does |
+A common question is: **Does the app train its AI model when you open it?**
+
+> [!IMPORTANT]
+> **No, the app never trains on launch.** It operates strictly in **Inference Mode (Forward Pass only)**.
+>
+> Training a deep learning model is computationally intensive, requiring high CPU/GPU resources and time. Doing so on launch would defeat the purpose of an optimizer by creating a massive performance bottleneck.
+
+### The Lifecycle of the Model
+1. **Offline Training (Developer Phase)**: The model is designed as a custom **Gated Recurrent Unit (GRU)** neural network. It is trained offline on pre-collected telemetry datasets using PyTorch (`src/training/train.py`).
+2. **Quantization & Export**: The fully trained model weights are exported to the Open Neural Network Exchange (ONNX) format and quantised to 8-bit integers (`src/models/gru_quantized.onnx`). This shrinks the model size to just ~0.17 MB.
+3. **App Startup & ONNX Runtime (User Phase)**:
+   - When you open the dashboard, the app initializes a single-threaded **ONNX Runtime session** bound to a dedicated background daemon thread.
+   - The session is strictly restricted to a single CPU core, consuming **less than 2% CPU overhead** to ensure the optimizer itself never slows your system.
+4. **The Warm-Up Sequence**:
+   - For the first **60 seconds**, the background thread polls system telemetry using `psutil` once per second and populates a sliding-window queue (`collections.deque`).
+   - During this window-filling phase, the AI Gauge Ring shows **0% Confidence (Analyzing system...)** because the GRU requires a historical sequence of 60 consecutive seconds to make an accurate temporal prediction.
+5. **Real-Time Inference (1Hz)**:
+   - Once 60 seconds of history accumulate, the pipeline feeds the normalized window into the pre-trained GRU model every second.
+   - The model runs a quick mathematical forward pass and outputs:
+     - A **bottleneck confidence score** (0.0 to 1.0) indicating how likely your system is to experience severe slowdowns in the next 30 seconds.
+     - The predicted **CPU %** and **Memory %** values at the 30-second future horizon.
+   - Results are pushed into a thread-safe Queue, which Flet regularly consumes to update the UI elements without blocking the rendering thread.
+
+---
+
+## 🔬 Why Calibrate on a New Machine?
+
+When the application is run on a new computer for the first time, it automatically initiates a **90-second silent calibration phase** visible on the central Circular Gauge.
+
+### The Problem: Hardware Divergence
+The GRU model was originally trained on telemetry collected from a specific developer machine. Every computer has fundamentally different hardware limits:
+- An ultra-book with a 4-core CPU idles and peaks differently than a high-end 16-core desktop.
+- Different RAM capacities (e.g., 8 GB vs. 64 GB) mean a 4 GB load represents a 50% critical pressure on one machine but only 6% idle on another.
+- Thermal boundaries and clock speed scaling vary heavily by device and manufacturer.
+
+If we normalized live telemetry using the bundled MinMaxScaler fitted on the developer's system, the normalized features fed into the GRU would be completely skewed, leading to out-of-distribution values and rendering the AI predictions inaccurate.
+
+### The Solution: Domain Adaptation via Local Calibration
+To adapt the AI to *your* specific hardware without retraining the neural network, the app performs a local **calibration**:
+- **Fixed Model Weights**: The pre-trained temporal patterns learned by the GRU (such as spike curves and resource build-up signatures) are universal and remain locked.
+- **Re-Fitted Scaler**: The normalisation layer is adapted. For the first 90 seconds of a new installation, the app logs the system's baseline ranges.
+- **Calibration File**: At 90 seconds, the app fits a new, personalized `MinMaxScaler` and serializes it to **`~/.sro_optimizer/scaler_local.pkl`** in the user's home directory.
+- **Subsequent Runs**: On all future launches, the app detects this local file, skips calibration entirely, and begins active GRU inference within 60 seconds.
+
+*Note: You can delete the `~/.sro_optimizer/scaler_local.pkl` file at any time to force the application to re-calibrate to new hardware configurations.*
+
+---
+
+## 🎛️ Dashboard Controls
+
+| Control | What It Does |
 |---|---|
-| 🤖 **Auto-Pilot OFF/ON** | Toggle autonomous mode. When ON, the optimizer automatically boosts your system whenever the AI confidence is high — no manual clicks needed. Fires at most once every 45 seconds. |
-| 🚀 **One-Click Boost** | Manually trigger an immediate optimisation: resumes all suspended processes and runs Python garbage collection to free memory. |
-| ↩ **Undo Last Action** | Immediately resumes all processes that were suspended by the optimizer. Only active when processes are suspended. |
+| 🤖 **Auto-Pilot Switch** | Toggle autonomous mode in the Settings page or the Right Rail. When ON, the optimizer automatically invokes the One-Click Boost routine whenever AI confidence is $\ge 80\%$ (limited by a 45s safety cooldown). |
+| 🚀 **One-Click Boost** | Manually triggers an immediate optimization event: resumes all suspended processes, runs Python garbage collection, and clears memory. |
+| ↩ **Undo Button** | Immediately restores all processes that were suspended during the current session. Disabled when no processes are suspended. |
 
----
-
-## 🧠 How the AI Model Works
-
-The model is a **Gated Recurrent Unit (GRU)** neural network trained on real system telemetry collected from this machine. It learns the temporal patterns of CPU and memory usage — recognising the build-up signatures that precede bottlenecks — and predicts them 30 seconds before they peak.
-
-- **Input:** 60 seconds of 8 system metrics (sliding window)
-- **Output:** Predicted resource values + bottleneck probability
-- **Format:** INT8-quantised ONNX model (~0.5 MB) for fast, lightweight inference
-
----
-
-## 🔬 Adaptive Hardware Calibration
-
-### The Problem
-The GRU model was originally trained on data collected from one specific machine. Every computer has different hardware characteristics:
-- A 4-core laptop idles at different CPU% than a 16-core desktop
-- Different RAM capacities mean different memory pressure thresholds
-- Clock speeds and temperatures vary by chipset
-
-If the bundled MinMax scaler (fitted on the training machine) normalises data from a different machine, the GRU sees patterns it was never trained on — reducing prediction accuracy.
-
-### The Solution — Domain Adaptation via Local Scaler Calibration
-On **first launch on any new machine**, the app automatically runs a **90-second silent calibration phase**. This is a form of **domain adaptation**: the GRU weights (learned temporal patterns) stay fixed, but the normalisation layer is re-fitted to the new machine's specific value ranges.
-
-### How It Is Implemented
-
-**1. Detection (`pipeline.py` — `Pipeline.__init__`)**
-```python
-if os.path.isfile(LOCAL_SCALER_PATH):       # ~/.sro_optimizer/scaler_local.pkl
-    self._scaler      = load(LOCAL_SCALER_PATH)   # use local scaler
-    self._calibrating = False
-else:
-    self._scaler      = load(SCALER_PATH)   # use bundled fallback
-    self._calibrating = True                # trigger calibration
-    self._cal_buffer  = []
-```
-
-**2. Data Collection (`pipeline.py` — `_run` loop)**  
-During calibration, every telemetry sample (already scaled with the bundled scaler) is appended to `_cal_buffer`. The UI is kept alive — charts and cards update normally. The AI panel shows 0% confidence (correct — we don't infer during calibration).
-
-**3. Fitting the Local Scaler (`pipeline.py` — `_finish_calibration`)**  
-After 90 samples are collected:
-```python
-data         = np.array(self._cal_buffer)   # shape: (90, n_features)
-local_scaler = MinMaxScaler()
-local_scaler.fit(data)                      # learns THIS machine's min/max ranges
-pickle.dump(local_scaler, open(LOCAL_SCALER_PATH, "wb"))
-self._scaler      = local_scaler
-self._calibrating = False
-self._window.clear()                        # start fresh window with new scaler
-```
-The local scaler is saved to **`~/.sro_optimizer/scaler_local.pkl`** — the user's home directory, outside the app bundle, so it survives app updates.
-
-**4. Subsequent Launches**  
-`LOCAL_SCALER_PATH` is found on startup → calibration is skipped entirely → AI inference begins within 60 seconds of opening the app.
-
-### What You See During Calibration
-
-A green banner appears at the top of the dashboard:
-
-```
-🔬  Calibrating to your hardware — 73s remaining...   [████████░░░░░░░░░░░░]
-```
-
-When complete:
-```
-✅  Calibrated to your hardware! AI mode active.
-```
-A desktop notification also fires, and the banner fades after 3.5 seconds.
-
-### Scaler vs Model — Why Only the Scaler Is Re-fitted
-
-| Component | Action | Why |
-|---|---|---|
-| **GRU weights** | Unchanged | Temporal spike patterns (fast rise → plateau → drop) are universal across hardware |
-| **MinMax Scaler** | Re-fitted locally | Value ranges (what counts as "high" CPU) are machine-specific |
-
-This approach is computationally cheap (no GPU, no retraining), takes only 90 seconds, and requires zero user input — it runs silently in the background.
+### The Action Engine: Safe Process Suspension
+When confidence crosses the 80% threshold in Auto-Pilot mode, the optimizer:
+1. Iterates through active processes and screens them against a strict, hard-coded **System Whitelist** (protecting core operating system kernel services, security binaries, desktop window managers, and the optimizer itself).
+2. Suspends the top 3 non-whitelisted CPU consumers using `psutil.Process(pid).suspend()`.
+3. Auto-resumes any suspended processes after a **5-minute safety watchdog timeout** to guarantee no user process remains suspended indefinitely, even if the application is closed.
 
 ---
 
 ## 📁 Project Structure
 
+All application components are organized within a structured workspace layout:
+
 ```
 Final_year/
-├── Data_collector/
-│   ├── collector.py       # Telemetry collection script
-│   ├── preprocess.py      # Data cleaning & window generation
-│   ├── config.py          # Central configuration + calibration constants
-│   └── data/              # Collected CSV data
-│       └── models/        # Trained model + scaler
-├── data_pipeline/
-│   ├── pipeline.py        # Real-time inference loop + calibration logic
-│   ├── action_engine.py   # Process suspend/resume logic
-│   └── notifier.py        # Desktop notifications (osascript on macOS)
-├── files/
-│   ├── main.py            # PyQt6 dashboard (entry point)
-│   ├── gru_model.py       # GRU architecture definition
-│   └── train.py           # Model training script
-├── assets/                # App icon (icon.icns / icon.png)
-├── requirements.txt       # Python dependencies
-└── README.md              # This file
+├── src/
+│   ├── main.py            # Modern Flet-based dashboard (primary entry point)
+│   ├── main_backup.py     # PyQt6-based fallback dashboard
+│   ├── config.py          # Central settings, constants, and Whitelists
+│   ├── core/
+│   │   ├── pipeline.py       # Live 1Hz telemetry polling & inference coordination
+│   │   ├── action_engine.py  # Thread-safe process suspend/resume watchdog
+│   │   ├── collector.py      # Independent producer-consumer telemetry logger
+│   │   └── notifier.py       # Asynchronous cross-platform OS notifications
+│   ├── data/
+│   │   ├── telemetry_raw.csv   # Raw telemetry gathered during collector runs
+│   │   ├── telemetry_clean.csv # Deduplicated and cleaned telemetry
+│   │   └── windows.npz         # Saved sliding-window sequences for training
+│   ├── models/
+│   │   ├── gru_checkpoint.pt   # Raw PyTorch model weight state dictionary
+│   │   ├── gru_fp32.onnx       # Full-precision standard ONNX graph export
+│   │   ├── gru_quantized.onnx  # INT8 quantized lightweight ONNX model used for live inference
+│   │   └── scaler.pkl          # Reference MinMaxScaler fitted on baseline system
+│   └── training/
+│       ├── gru_model.py      # PyTorch GRU Neural Network class definition
+│       ├── preprocess.py     # Training set sequence building & labeling logic
+│       └── train.py          # PyTorch optimizer training loop with Early Stopping
+├── docs/
+│   ├── dataset_collection.docx # Document A: System feature selection & collection telemetry
+│   ├── model_documentation.docx # Document B: GRU gate equations & model training metrics
+│   ├── data_pipeline.docx      # Document C: Live data scaling, ONNX session, & action watchdog
+│   ├── ui_documentation.docx   # Document D: Flet layout, canvas charts, and thread-safe queues
+│   └── project_documentation.docx # Complete academic project compendium and reference
+├── requirements.txt       # Core Python library dependencies
+├── Run_Windows.bat        # Double-click script to run modern Flet on Windows
+├── Run_macOS.command      # Double-click script to run modern Flet on macOS
+└── README.md              # This comprehensive system guide
 ```
-
-> **Local calibration file:** `~/.sro_optimizer/scaler_local.pkl`  
-> Created automatically on first launch. Delete this file to force re-calibration.
 
 ---
 
 ## 🔧 Running From Source
 
+Follow these sequential steps to run, train, or collect data using the system optimizer:
+
+### 1. Environment Setup
+Install the necessary system and machine learning libraries:
 ```bash
-# Install dependencies
 pip install -r requirements.txt
+```
 
-# 1. Collect data (run for at least 5 minutes, then Ctrl+C)
-python3 Data_collector/collector.py --label idle
+### 2. Live Telemetry Logging (Optional)
+Collect local system data under custom baseline labels:
+```bash
+python3 src/core/collector.py --label idle --duration 3600
+```
 
-# 2. Preprocess & build training windows
-python3 Data_collector/preprocess.py
+### 3. Preprocessing (Optional)
+Deduplicate raw telemetry, handle sensor gaps, and structure sliding windows:
+```bash
+python3 src/training/preprocess.py
+```
 
-# 3. Train the GRU model
-python3 files/train.py
+### 4. Offline Model Training (Optional)
+Train a new custom GRU model in PyTorch and export to quantized ONNX format:
+```bash
+python3 src/training/train.py
+```
 
-# 4. Launch the dashboard
-python3 files/main.py
+### 5. Launching the App
+Start the high-performance Flet dashboard:
+```bash
+python3 src/main.py
 ```
 
 ---
-
-*KNUST Final Year Project — Group 4 | Built with PyQt6, PyTorch, ONNX Runtime & psutil*
+*KNUST Final Year Project — Group 4 | Built with Flet, PyTorch, ONNX Runtime, and psutil*

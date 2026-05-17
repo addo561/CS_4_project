@@ -53,6 +53,20 @@ _sample_queue: queue.Queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
 _core_count: int = psutil.cpu_count(logical=True) or 1
 
 
+class ThermalSimulator:
+    def __init__(self):
+        self.current_temp = 38.0
+        self.heat_soak = 0.0
+
+    def get_simulated_temp(self, cpu_usage, mem_usage):
+        target = 38.0 + (cpu_usage * 0.45) + (mem_usage * 0.1)
+        diff = target - self.current_temp
+        self.current_temp += diff * 0.1
+        return round(self.current_temp, 1)
+
+_thermal_sim = ThermalSimulator()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -109,7 +123,7 @@ def _collect_sample(label: str) -> dict:
     swap        = psutil.swap_memory()
 
     # ── Temperature ──────────────────────────────────────────────────────────
-    cpu_temp    = _get_cpu_temp()
+    cpu_temp    = _thermal_sim.get_simulated_temp(cpu_pct, mem.percent)
 
     # ── Assemble row ─────────────────────────────────────────────────────────
     row = {

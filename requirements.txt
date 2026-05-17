@@ -24,6 +24,7 @@ onnxruntime>=1.16.0       # CPU inference (no GPU required)
 # ── GUI ──────────────────────────────────────────────────────────
 PyQt6>=6.5.0
 pyqtgraph>=0.13.3
+flet>=0.22.0
 
 # ── Desktop notifications (optional — app runs fine without it) ──
 plyer>=2.1.0
