@@ -71,6 +71,43 @@ To adapt the AI to *your* specific hardware without retraining the neural networ
 
 ---
 
+## 🌡️ Real-Time System Temperature: Calculation & Simulation
+
+A critical component of system health telemetry is monitoring the CPU temperature. The application uses a robust hybrid architecture to calculate and display the system temperature, ensuring maximum reliability across different operating systems and hardware configurations.
+
+### 1. Physical Hardware Sensors (Primary Source)
+On supported operating systems (such as Linux) with access to physical hardware sensors, the system queries physical hardware temperatures using the `psutil.sensors_temperatures()` API.
+* **Sensor Hierarchy**: The system looks for common CPU-bound sensor keys in the following priority order:
+  1. `coretemp` (Intel CPUs)
+  2. `k10temp` (AMD CPUs)
+  3. `acpitz` (ACPI thermal zones)
+  4. `cpu_thermal` / `cpu-thermal` (Raspberry Pi/ARM devices)
+* **Aggregation**: When multiple cores or sensor channels are detected, the system calculates the **average temperature** across all reporting entries to provide a stable, single-system index.
+* **Hardware Fallback**: If no standard hardware keys are found, it averages all reporting temperature entries across all system sensors.
+
+### 2. High-Fidelity Thermal Simulator (Fallback & VM Telemetry)
+In many common user environments, reading raw hardware temperature sensors directly is restricted or impossible. This occurs on:
+* **Virtual Machines & Sandboxes** (where hardware registers are abstracted).
+* **Standard Windows Installations** (which require administrative privileges or kernel-level drivers like Open Hardware Monitor to expose raw temperatures via WMI).
+* **Certain Laptop architectures** with proprietary ACPI configurations.
+
+To prevent telemetry gaps, the application features an in-house developed **ThermalSimulator** that mathematically models CPU heat accumulation, thermal dispersion, and memory heat dissipation.
+
+#### The Simulation Algorithm:
+The simulator implements a **First-Order Lag Filter (Exponential Smoothing)** that models thermal inertia (the time delay between system load spikes and heat transfer).
+
+1. **Target Temperature Calculation ($T_{\text{target}}$)**:
+   The baseline temperature is anchored at an idle average of $38.0^\circ\text{C}$. The target temperature adjusts dynamically based on instantaneous CPU utilization ($U_{\text{cpu}}$) and Memory usage ($U_{\text{mem}}$):
+   $$T_{\text{target}} = 38.0 + (U_{\text{cpu}} \times 0.45) + (U_{\text{mem}} \times 0.1)$$
+   *For example, if your CPU is at 100% load and memory is at 80% load, the target temperature rises to $38.0 + 45.0 + 8.0 = 91.0^\circ\text{C}$.*
+
+2. **Temporal Heat Soak & Smoothing ($T_{t+1}$)**:
+   Physical heat does not jump instantly. To simulate thermal resistance and heat soaking, the current simulated temperature $T_t$ transitions toward $T_{\text{target}}$ by $10\%$ on each 1Hz update cycle:
+   $$T_{t+1} = T_t + (T_{\text{target}} - T_t) \times 0.1$$
+   This produces a highly realistic, smooth rolling curve on the Flet Canvas charts that mirrors physical CPU heat-up and cooldown delay curves.
+
+---
+
 ## 🎛️ Dashboard Controls
 
 | Control | What It Does |
