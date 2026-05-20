@@ -197,6 +197,48 @@ class InferenceEngine:
 
 
 # ---------------------------------------------------------------------------
+# ResourceMonitor — prevents pipeline memory leaks & monitors CPU usage
+# ---------------------------------------------------------------------------
+
+class ResourceMonitor:
+    """Monitor pipeline resource usage."""
+    
+    def __init__(self):
+        self.last_check = 0
+        self.warning_count = 0
+        self.proc = psutil.Process()
+    
+    def check(self):
+        """Check resources every 5 seconds."""
+        now = time.time()
+        if now - self.last_check < 5:
+            return
+        self.last_check = now
+        
+        try:
+            # Memory check
+            mem_mb = self.proc.memory_info().rss / (1024 * 1024)
+            if mem_mb > 400:
+                log.warning(f"⚠️  High memory: {mem_mb:.1f} MB - triggering GC")
+                import gc
+                gc.collect()
+                self.warning_count += 1
+            
+            # CPU check
+            cpu_pct = self.proc.cpu_percent(interval=0.1)
+            if cpu_pct > 80:
+                log.warning(f"⚠️  High CPU: {cpu_pct:.1f}%")
+                self.warning_count += 1
+            
+            if self.warning_count > 10:
+                log.error("❌  Resource exhaustion - app may freeze!")
+                self.warning_count = 0
+        
+        except Exception as e:
+            log.error(f"Error monitoring resources: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
 
@@ -232,6 +274,7 @@ class Pipeline:
         self._action       = ActionEngine()
         self._notifier     = Notifier()
         self._thermal_sim  = ThermalSimulator()
+        self._thermal_warnings_logged = set()
         self._window       = collections.deque(maxlen=WINDOW_SIZE)
         self._stop_event   = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -319,8 +362,13 @@ class Pipeline:
         psutil.cpu_percent(interval=None, percpu=True)
         time.sleep(POLL_INTERVAL_SEC)
 
+        monitor = ResourceMonitor()
+        iteration = 0
+        slow_loops = []
+
         while not self._stop_event.is_set():
             tick = time.monotonic()
+            loop_start = time.perf_counter()
             try:
                 raw    = self._collect_raw()
                 scaled = self._scale(raw)
@@ -346,8 +394,19 @@ class Pipeline:
                         calibrating    = True,
                     )
                     self._on_result(result)
+                    
+                    # Every 100 iterations, check resources
+                    if iteration % 100 == 0:
+                        monitor.check()
+                    
+                    # Timing check
+                    loop_time = time.perf_counter() - loop_start
+                    if loop_time > POLL_INTERVAL_SEC * 2:  # 2x slower than expected
+                        log.warning(f"⚠️  Slow iteration (calib): {loop_time*1000:.1f}ms")
+                    
                     elapsed = time.monotonic() - tick
                     time.sleep(max(0.0, POLL_INTERVAL_SEC - elapsed))
+                    iteration += 1
                     continue
 
                 # ── Normal inference phase ────────────────────────────────────────
@@ -392,11 +451,26 @@ class Pipeline:
                 )
                 self._on_result(result)
 
+                # Every 100 iterations, check resources
+                if iteration % 100 == 0:
+                    monitor.check()
+
+                # Timing check
+                loop_time = time.perf_counter() - loop_start
+                if loop_time > POLL_INTERVAL_SEC * 2:  # 2x slower than expected
+                    msg = f"⚠️  Slow iteration: {loop_time*1000:.1f}ms"
+                    log.warning(msg)
+                    slow_loops.append(loop_time)
+                    if len(slow_loops) > 5:
+                        log.error(f"❌  {len(slow_loops)} slow iterations detected - pipeline may freeze!")
+                        slow_loops = []
+
             except Exception as exc:
                 log.error(f"Pipeline loop error: {exc}", exc_info=True)
 
             elapsed = time.monotonic() - tick
             time.sleep(max(0.0, POLL_INTERVAL_SEC - elapsed))
+            iteration += 1
 
     def _finish_calibration(self):
         """Fit a MinMaxScaler on the collected calibration buffer and save it."""
@@ -439,7 +513,12 @@ class Pipeline:
         freq     = psutil.cpu_freq()
         mem      = psutil.virtual_memory()
         swap     = psutil.swap_memory()
-        temp     = self._thermal_sim.get_simulated_temp(cpu_pct, mem.percent)
+        # ── Temperature ──────────────────────────────────────────────────────────
+        real_temp = self._get_temp()
+        if real_temp == TEMP_FALLBACK:
+            temp = self._thermal_sim.get_simulated_temp(cpu_pct, mem.percent)
+        else:
+            temp = real_temp
 
         # ── EMA smoothing (proposal alpha=0.3) ────────────────────────────────
         alpha = 0.3
@@ -507,18 +586,27 @@ class Pipeline:
             raw[f"cpu_core_{i}"] = round(pct, 2)
         return raw
 
-    @staticmethod
-    def _get_temp() -> float:
+    def _get_temp(self) -> float:
         try:
             temps = psutil.sensors_temperatures()
-            if temps:
-                for key in ("coretemp", "k10temp", "acpitz", "cpu_thermal"):
-                    if key in temps:
-                        readings = [t.current for t in temps[key] if t.current]
-                        if readings:
-                            return round(sum(readings) / len(readings), 2)
-        except (AttributeError, NotImplementedError):
-            pass
+            if not temps:
+                if "no_sensors" not in self._thermal_warnings_logged:
+                    log.warning("⚠️  No temperature sensors detected")
+                    log.warning("   Thermal data unavailable (common on VMs, MacBooks)")
+                    log.warning("   Using simulated temperature values for model inputs")
+                    self._thermal_warnings_logged.add("no_sensors")
+                return TEMP_FALLBACK
+
+            # Try common sensor keys in priority order
+            for key in ("coretemp", "k10temp", "acpitz", "cpu_thermal"):
+                if key in temps:
+                    readings = [t.current for t in temps[key] if t.current]
+                    if readings:
+                        return round(sum(readings) / len(readings), 2)
+        except Exception as e:
+            if "sensor_error" not in self._thermal_warnings_logged:
+                log.warning(f"⚠️  Could not read temperature sensors: {e}")
+                self._thermal_warnings_logged.add("sensor_error")
         return TEMP_FALLBACK
 
     def _scale(self, raw: dict) -> Optional[np.ndarray]:

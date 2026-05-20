@@ -22,6 +22,11 @@ from sklearn.metrics import (
     confusion_matrix, mean_absolute_error
 )
 
+# Add parent directory (src/) to sys.path so config can be found when run directly
+_PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT_DIR not in sys.path:
+    sys.path.insert(0, _PARENT_DIR)
+
 from config import (
     DATA_DIR, MODEL_DIR, WINDOW_SIZE,
     GRU_HIDDEN_SIZE, GRU_NUM_LAYERS, DROPOUT,
@@ -169,6 +174,31 @@ def quantize_onnx(onnx_path: str, quantized_path: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Device configuration and validation
+# ---------------------------------------------------------------------------
+
+def get_device() -> torch.device:
+    """
+    Detects GPU/CUDA availability. Logs hardware parameters or prompts for CPU fallback.
+    """
+    if torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
+        device_name = torch.cuda.get_device_name(0)
+        capability = torch.cuda.get_device_capability(0)
+        log.info(f"✅  CUDA is available. Count: {device_count}, Name: {device_name}, Capability: {capability}")
+        return torch.device("cuda")
+    else:
+        log.warning("⚠️  GPU/CUDA is NOT available! Training on CPU will be 10-20x slower.")
+        try:
+            choice = input("Continue training on CPU? (y/n): ").strip().lower()
+            if choice != 'y':
+                raise RuntimeError("Training aborted by user due to lack of GPU/CUDA acceleration.")
+        except (IOError, EOFError):
+            log.warning("Non-interactive session or stdin not available. Proceeding with CPU fallback.")
+        return torch.device("cpu")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -180,7 +210,7 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(MODEL_DIR, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     log.info(f"Training device: {device}")
 
     # ── Data ──────────────────────────────────────────────────────────────────

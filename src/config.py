@@ -30,10 +30,57 @@ MODEL_PATH  = os.path.join(MODEL_DIR, "gru_quantized.onnx")
 # Saved in the user's home directory so it persists across app updates and
 # works on any machine without touching the bundled model files.
 import pathlib
-_LOCAL_DIR       = os.path.join(pathlib.Path.home(), ".sro_optimizer")
-LOCAL_SCALER_DIR = _LOCAL_DIR
-LOCAL_SCALER_PATH = os.path.join(_LOCAL_DIR, "scaler_local_v2.pkl")
+
+def _get_local_scaler_dir():
+    """Get writable directory for local scaler, with fallbacks."""
+    # Try 1: ~/.sro_optimizer
+    try:
+        home_dir = os.path.join(pathlib.Path.home(), ".sro_optimizer")
+        os.makedirs(home_dir, exist_ok=True)
+        # Test write access
+        test_file = os.path.join(home_dir, ".test")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        return home_dir
+    except (OSError, PermissionError):
+        pass
+    
+    # Try 2: App-local directory
+    try:
+        app_local = os.path.join(BASE_DIR, ".sro_optimizer")
+        os.makedirs(app_local, exist_ok=True)
+        test_file = os.path.join(app_local, ".test")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        return app_local
+    except (OSError, PermissionError):
+        pass
+    
+    # Try 3: Temp directory
+    import tempfile
+    try:
+        temp_dir = os.path.join(tempfile.gettempdir(), ".sro_optimizer")
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir
+    except:
+        pass
+    
+    # Last resort: None (will use CPU/heuristic only or not persist)
+    return None
+
+LOCAL_SCALER_DIR = _get_local_scaler_dir()
+if LOCAL_SCALER_DIR:
+    LOCAL_SCALER_PATH = os.path.join(LOCAL_SCALER_DIR, "scaler_local_v2.pkl")
+else:
+    LOCAL_SCALER_PATH = ""
 CALIBRATION_SECONDS = 90   # seconds of idle data to collect on first launch
+
+# Auto-create required directories (Issue #11)
+for directory in [DATA_DIR, MODEL_DIR, LOG_DIR, LOCAL_SCALER_DIR]:
+    if directory:
+        pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
 
 # ── Data Collection ───────────────────────────────────────────────────────────
 POLL_INTERVAL_SEC   = 1.0       # seconds between each telemetry sample

@@ -905,7 +905,7 @@ class MainWindow(QMainWindow):
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-def main():
+def run_pyqt_ui():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(QSS)
@@ -921,6 +921,10 @@ def main():
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
+
+
+def main():
+    run_pyqt_ui()
 
 
 if __name__ == "__main__":

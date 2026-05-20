@@ -22,6 +22,27 @@ def bold(t):   return f"\033[1m{t}\033[0m"
 OS   = platform.system()          # "Darwin" | "Windows" | "Linux"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+def fix_executable_permissions():
+    """Fix execute permissions for shell scripts."""
+    if OS in ["Darwin", "Linux"]:
+        scripts = [
+            "Run_macOS.command",
+            os.path.join("src", "core", "collector.py"),
+            os.path.join("src", "training", "train.py"),
+            os.path.join("src", "main.py"),
+        ]
+        for script in scripts:
+            path = os.path.join(HERE, script)
+            if os.path.isfile(path):
+                try:
+                    os.chmod(path, 0o755)
+                    print(green(f"✅  Fixed permissions: {script}"))
+                except Exception as e:
+                    print(yellow(f"⚠️  Could not fix {script}: {e}"))
+
+# Call this early in the install process
+fix_executable_permissions()
+
 print()
 print(bold("=" * 60))
 print(bold("  ⚡  System Resource Optimizer — Installer"))
@@ -97,14 +118,15 @@ if not os.path.isfile(MODEL) or not os.path.isfile(SCALER):
     print(yellow("   The app will run in HEURISTIC mode (no AI predictions)."))
     print(yellow("   To train the model, run these commands first:"))
     print()
-    if OS == "Windows":
-        print(yellow("   python src\\core\\collector.py --label idle  (run 5+ min, then Ctrl+C)"))
-        print(yellow("   python src\\training\\preprocess.py"))
-        print(yellow("   python src\\training\\train.py"))
-    else:
-        print(yellow("   python3 src/core/collector.py --label idle  (run 5+ min, then Ctrl+C)"))
-        print(yellow("   python3 src/training/preprocess.py"))
-        print(yellow("   python3 src/training/train.py"))
+    import pathlib
+    collector_path = str(pathlib.Path("src") / "core" / "collector.py")
+    preprocess_path = str(pathlib.Path("src") / "training" / "preprocess.py")
+    train_path = str(pathlib.Path("src") / "training" / "train.py")
+    python_cmd = "python" if OS == "Windows" else "python3"
+
+    print(yellow(f"   {python_cmd} {collector_path} --label idle  (run 5+ min, then Ctrl+C)"))
+    print(yellow(f"   {python_cmd} {preprocess_path}"))
+    print(yellow(f"   {python_cmd} {train_path}"))
     print()
     proceed = input("Launch app anyway? [Y/n]: ").strip().lower()
     if proceed == "n":

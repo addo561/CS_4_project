@@ -7,6 +7,15 @@
 # Get the folder this script lives in
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Fix permissions dynamically
+chmod +x "$0"
+if [ -f "$SCRIPT_DIR/install_and_run.py" ]; then
+    chmod +x "$SCRIPT_DIR/install_and_run.py"
+fi
+if [ -f "$SCRIPT_DIR/src/main.py" ]; then
+    chmod +x "$SCRIPT_DIR/src/main.py"
+fi
+
 # Try to open the pre-built .app bundle first
 APP="$SCRIPT_DIR/dist/System Resource Optimizer.app"
 if [ -d "$APP" ]; then

@@ -30,6 +30,61 @@ if _DIR not in sys.path:
 from core.pipeline import Pipeline, PipelineResult
 from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC
 
+# Background process scanner - prevents UI freezing
+_process_cache = {
+    "data": [],
+    "lock": threading.Lock(),
+    "last_update": 0
+}
+
+def _background_process_scanner():
+    """
+    Scan system processes in background thread.
+    Never blocks the UI.
+    """
+    while True:
+        try:
+            procs = []
+            start = time.time()
+            
+            # Scan all processes (this WILL take time, but it's on background thread!)
+            for p in psutil.process_iter(["pid", "name", "memory_percent", "status"]):
+                try:
+                    mem = p.info.get("memory_percent") or 0
+                    if mem > 0.1:
+                        procs.append(p.info)
+                except (psutil.Error, KeyError):
+                    continue
+            
+            # Sort and cache
+            procs.sort(key=lambda x: x["memory_percent"], reverse=True)
+            
+            scan_time = time.time() - start
+            if scan_time > 2.0:
+                print(f"⚠️  Slow process scan: {scan_time:.2f}s", flush=True)
+            
+            # Update cache atomically
+            with _process_cache["lock"]:
+                _process_cache["data"] = procs[:20]
+                _process_cache["last_update"] = time.time()
+        
+        except Exception as e:
+            print(f"Error scanning processes: {e}", flush=True)
+        
+        time.sleep(3)  # Scan every 3 seconds (on background thread!)
+
+def _is_flet_broken() -> bool:
+    """Check if Flet environment is broken or PyQt6 is forced."""
+    if os.environ.get("SRO_USE_PYQT", "").lower() in ("true", "1"):
+        print("ℹ️  SRO_USE_PYQT env var detected. Forcing PyQt6 dashboard fallback.", flush=True)
+        return True
+    try:
+        import flet as ft
+        return False
+    except Exception as e:
+        print(f"⚠️ Flet check failed: {e}. Falling back to PyQt6.", flush=True)
+        return True
+
 # ── Design tokens (design.md) ─────────────────────────────────────────────────
 BG = "#0D1117"
 CARD = "#161B22"
@@ -1404,21 +1459,22 @@ def run_app(page: ft.Page) -> None:
             time.sleep(0.1)
 
     def poll_processes() -> None:
+        """
+        FIXED VERSION: Never blocks the UI thread.
+        Gets cached process data from background scanner.
+        """
         while pipeline:
             try:
-                procs = []
-                for p in psutil.process_iter(["pid", "name", "memory_percent", "status"]):
-                    try:
-                        mem = p.info.get("memory_percent") or 0
-                        if mem > 0.1:
-                            procs.append(p.info)
-                    except (psutil.Error, KeyError):
-                        continue
-                procs.sort(key=lambda x: x["memory_percent"], reverse=True)
-                result_q.put(("proc_table", procs[:20]))
-            except Exception:
-                pass
-            time.sleep(3)
+                # Get cached data (VERY FAST - no blocking!)
+                with _process_cache["lock"]:
+                    if _process_cache["data"]:
+                        # Send cached data to UI
+                        result_q.put(("proc_table", _process_cache["data"]))
+            except Exception as e:
+                print(f"Error in poll_processes: {e}", flush=True)
+            
+            # Poll frequently but briefly
+            time.sleep(0.5)
 
     def on_boost(_e) -> None:
         if not pipeline:
@@ -1456,6 +1512,15 @@ def run_app(page: ft.Page) -> None:
     ui_callbacks["on_autopilot"] = on_autopilot
     ui.undo_btn.disabled = True
 
+    # START BACKGROUND SCANNER BEFORE PIPELINE
+    scanner_thread = threading.Thread(
+        target=_background_process_scanner,
+        daemon=True,
+        name="ProcessScannerThread"
+    )
+    scanner_thread.start()
+    print("✅  Background process scanner started", flush=True)
+
     pipeline = Pipeline(
         on_result=lambda r: result_q.put(r),
         on_calibration_progress=lambda el, tot: calib_q.put((el, tot)),
@@ -1481,4 +1546,21 @@ def main(page: ft.Page) -> None:
 
 
 if __name__ == "__main__":
-    ft.run(main)
+    if _is_flet_broken():
+        try:
+            from main_pyqt import run_pyqt_ui
+            run_pyqt_ui()
+        except Exception as e:
+            print(f"❌ Failed to fall back to PyQt6: {e}", flush=True)
+            sys.exit(1)
+    else:
+        try:
+            ft.run(main)
+        except Exception as e:
+            print(f"⚠️ Flet runtime error: {e}. Falling back to PyQt6...", flush=True)
+            try:
+                from main_pyqt import run_pyqt_ui
+                run_pyqt_ui()
+            except Exception as e2:
+                print(f"❌ Failed to fall back to PyQt6: {e2}", flush=True)
+                sys.exit(1)

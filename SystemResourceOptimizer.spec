@@ -21,6 +21,8 @@ added_files = [
 ]
 added_files += collect_data_files("flet")
 added_files += collect_data_files("flet-desktop")
+added_files += collect_data_files("PyQt6")
+added_files += collect_data_files("pyqtgraph")
 
 # ── Hidden imports PyInstaller misses ─────────────────────────────────────────
 hidden = [

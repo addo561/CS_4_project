@@ -19,6 +19,7 @@ dist/
 # ── Collected telemetry data (can be huge) ───────────────────────────────────
 Data_collector/data/telemetry_raw.csv
 Data_collector/data/telemetry_clean.csv
+src/data/*.csv
 
 # ── Model checkpoints (keep .onnx and .pkl, skip large .pt) ──────────────────
 Data_collector/models/gru_checkpoint.pt

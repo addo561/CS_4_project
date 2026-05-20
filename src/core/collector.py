@@ -27,6 +27,10 @@ import psutil
 # ---------------------------------------------------------------------------
 # Ensure project root is on path when run directly
 # ---------------------------------------------------------------------------
+_PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT_DIR not in sys.path:
+    sys.path.insert(0, _PARENT_DIR)
+
 from config import (
     DATA_DIR, RAW_CSV, POLL_INTERVAL_SEC,
     QUEUE_MAX_SIZE, FLUSH_EVERY_N, TEMP_FALLBACK,
@@ -71,6 +75,8 @@ _thermal_sim = ThermalSimulator()
 # Helpers
 # ---------------------------------------------------------------------------
 
+_thermal_warnings_logged = set()  # Track what we've warned about
+
 def _get_cpu_temp() -> float:
     """
     Return the average package CPU temperature in °C.
@@ -80,6 +86,11 @@ def _get_cpu_temp() -> float:
     try:
         temps = psutil.sensors_temperatures()
         if not temps:
+            if "no_sensors" not in _thermal_warnings_logged:
+                log.warning("⚠️  No temperature sensors detected")
+                log.warning("   Thermal data unavailable (common on VMs, MacBooks)")
+                log.warning("   Using simulated temperature values for model inputs")
+                _thermal_warnings_logged.add("no_sensors")
             return TEMP_FALLBACK
 
         # Try common sensor keys in priority order
@@ -99,8 +110,10 @@ def _get_cpu_temp() -> float:
         if all_readings:
             return round(sum(all_readings) / len(all_readings), 2)
 
-    except (AttributeError, NotImplementedError):
-        pass  # psutil.sensors_temperatures() not available on this OS
+    except Exception as e:
+        if "sensor_error" not in _thermal_warnings_logged:
+            log.warning(f"⚠️  Could not read temperature sensors: {e}")
+            _thermal_warnings_logged.add("sensor_error")
 
     return TEMP_FALLBACK
 
@@ -123,7 +136,11 @@ def _collect_sample(label: str) -> dict:
     swap        = psutil.swap_memory()
 
     # ── Temperature ──────────────────────────────────────────────────────────
-    cpu_temp    = _thermal_sim.get_simulated_temp(cpu_pct, mem.percent)
+    real_temp   = _get_cpu_temp()
+    if real_temp == TEMP_FALLBACK:
+        cpu_temp = _thermal_sim.get_simulated_temp(cpu_pct, mem.percent)
+    else:
+        cpu_temp = real_temp
 
     # ── Assemble row ─────────────────────────────────────────────────────────
     row = {
@@ -216,8 +233,14 @@ def _consumer_thread(csv_path: str):
     """
     Drains _sample_queue and writes rows to CSV.
     Flushes every FLUSH_EVERY_N rows for durability.
+    Guards operations with robust try-catch blocks for restricted environments.
     """
-    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except Exception as exc:
+        log.error(f"❌  Failed to create directory {DATA_DIR}: {exc}")
+        return
+
     file_exists = os.path.isfile(csv_path)
 
     header: list | None = None
@@ -226,39 +249,61 @@ def _consumer_thread(csv_path: str):
 
     log.info(f"Consumer started | output={csv_path}")
 
-    with open(csv_path, mode="a", newline="", encoding="utf-8") as f:
-        writer = None  # initialised after first sample (to know full column set)
+    try:
+        with open(csv_path, mode="a", newline="", encoding="utf-8") as f:
+            writer = None  # initialised after first sample (to know full column set)
 
-        while not (_stop_event.is_set() and _sample_queue.empty()):
-            try:
-                row = _sample_queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
+            while not (_stop_event.is_set() and _sample_queue.empty()):
+                try:
+                    row = _sample_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
 
-            # Initialise writer on first row
-            if writer is None:
-                header = _build_header(row)
-                writer = csv.DictWriter(
-                    f, fieldnames=header, extrasaction="ignore"
-                )
-                if not file_exists:
-                    writer.writeheader()
-                    log.info(f"CSV created with {len(header)} columns.")
+                # Initialise writer on first row
+                if writer is None:
+                    header = _build_header(row)
+                    writer = csv.DictWriter(
+                        f, fieldnames=header, extrasaction="ignore"
+                    )
+                    if not file_exists:
+                        try:
+                            writer.writeheader()
+                            log.info(f"CSV created with {len(header)} columns.")
+                        except (PermissionError, IOError) as write_exc:
+                            log.error(f"❌  Failed to write CSV header: {write_exc}")
+                            raise write_exc
 
-            buffer.append(row)
+                buffer.append(row)
 
-            if len(buffer) >= FLUSH_EVERY_N:
-                writer.writerows(buffer)
-                f.flush()
-                total_written += len(buffer)
-                log.info(f"Flushed {len(buffer)} rows | total={total_written}")
-                buffer.clear()
+                if len(buffer) >= FLUSH_EVERY_N:
+                    try:
+                        writer.writerows(buffer)
+                        f.flush()
+                        total_written += len(buffer)
+                        log.info(f"Flushed {len(buffer)} rows | total={total_written}")
+                        buffer.clear()
+                    except (PermissionError, IOError) as write_exc:
+                        log.error(f"❌  Failed to flush {len(buffer)} rows to CSV: {write_exc}")
+                        raise write_exc
 
-        # Final flush
-        if writer and buffer:
-            writer.writerows(buffer)
-            f.flush()
-            total_written += len(buffer)
+            # Final flush
+            if writer and buffer:
+                try:
+                    writer.writerows(buffer)
+                    f.flush()
+                    total_written += len(buffer)
+                    buffer.clear()
+                except (PermissionError, IOError) as write_exc:
+                    log.error(f"❌  Failed to perform final CSV flush: {write_exc}")
+                    raise write_exc
+
+    except PermissionError:
+        log.error(f"❌  Permission denied writing to {csv_path}")
+        log.error("   Check file/directory permissions or if the file is locked by another process.")
+    except IOError as e:
+        log.error(f"❌  I/O error writing telemetry to {csv_path}: {e}")
+    except Exception as e:
+        log.error(f"❌  Unexpected error flushing CSV to {csv_path}: {e}")
 
     log.info(f"Consumer stopped | total rows written={total_written}")
 

@@ -207,18 +207,53 @@ class ActionEngine:
 
     # ── Internal helpers ────────────────────────────────────────────────────
 
-    def _is_safe_to_suspend(self, proc: psutil.Process) -> bool:
-        """
-        Mirrors proposal action_manager._is_safe_to_suspend:
-        checks whitelist AND skips root/SYSTEM account processes.
-        """
+    @classmethod
+    def _is_system_process(cls, proc: psutil.Process) -> bool:
+        """Enhanced system process detection."""
         try:
             name = proc.name().lower()
-            if name in self._WHITELIST:
-                return False
-
-            # Also check the config whitelist (may contain app-specific entries)
+            
+            # Check against static whitelist
+            if name in cls._WHITELIST:
+                return True
+            
+            # Check against config whitelist
             if name in {w.lower() for w in PROCESS_WHITELIST}:
+                return True
+            
+            # Check UID/GID on Unix systems (like macOS)
+            if hasattr(proc, 'uids'):
+                uids = proc.uids()
+                if uids.real == 0:  # Root/SYSTEM
+                    return True
+            
+            # Check if parent is system init
+            try:
+                parent = proc.parent()
+                if parent and parent.pid == 1:  # Parent is init
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            
+            # Additional safety: don't suspend if memory usage is extremely low (less than 0.1%)
+            try:
+                mem_percent = proc.memory_percent()
+                if mem_percent < 0.1:  # Less than 0.1% - likely system/idle
+                    return True
+            except psutil.AccessDenied:
+                pass
+            
+            return False
+        except Exception as e:
+            log.warning(f"Error checking if process is system: {e}")
+            return True  # Safer to assume system process
+
+    def _is_safe_to_suspend(self, proc: psutil.Process) -> bool:
+        """
+        Checks whitelist AND skips root/SYSTEM account processes.
+        """
+        try:
+            if self._is_system_process(proc):
                 return False
 
             # Skip system account processes (same check as proposal)
@@ -274,28 +309,66 @@ class ActionEngine:
         return [proc for _, proc in candidates[:max_targets]]
 
     def _suspend_process(self, proc: psutil.Process, reason: str) -> bool:
+        """Suspend a process with platform-specific safety checks."""
         try:
             name = proc.name()
+            pid = proc.pid
+            
+            # Whitelist and safety checks
+            if not self._is_safe_to_suspend(proc):
+                log.warning(f"Refusing to suspend unsafe process: {name} (PID {pid})")
+                return False
+            
+            import platform
+            PLATFORM = platform.system()
+            
+            # Platform-specific checks
+            if PLATFORM == "Darwin":  # macOS
+                # Extra caution on macOS - SIGSTOP is kernel-level
+                log.warning(f"⚠️  macOS: Suspending {name} (PID {pid}) - high risk!")
+                log.warning("   This sends SIGSTOP at kernel level")
+                
+                # Don't suspend system services or parent processes
+                if proc.parent() and proc.parent().pid == 1:
+                    log.error(f"Refusing to suspend system service parent: {name}")
+                    return False
+            
+            elif PLATFORM == "Windows":
+                # Windows: Check if process is doing I/O
+                if proc.status() == psutil.STATUS_RUNNING:
+                    try:
+                        io_counters = proc.io_counters()
+                        if io_counters and (io_counters.read_bytes > 0 or io_counters.write_bytes > 0):
+                            # It's doing I/O, let's be careful or skip
+                            log.warning(f"Process {name} is doing I/O - risky to suspend")
+                    except (psutil.AccessDenied, AttributeError):
+                        pass
+
             mem  = proc.memory_info().rss / (1024 * 1024)
             mem_str = f"{mem/1024:.1f}GB" if mem > 1024 else f"{mem:.1f}MB"
+            
+            # Actually suspend
+            log.info("Actually suspending process %d (%s) - Reason: %s", pid, name, reason)
             proc.suspend()
+            
             with self._lock:
-                self._suspended[proc.pid] = SuspendedProcess(
-                    pid          = proc.pid,
+                self._suspended[pid] = SuspendedProcess(
+                    pid          = pid,
                     name         = f"{name} ({mem_str})",
                     suspended_at = time.monotonic(),
                     reason       = reason,
                 )
-            log.info("Suspended PID %d (%s) using %s", proc.pid, name, mem_str)
+            log.info("Successfully suspended PID %d (%s) using %s", pid, name, mem_str)
             return True
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
             log.warning("Could not suspend PID %d: %s", proc.pid, exc)
             return False
 
     def _resume_process(self, pid: int) -> bool:
-        """Resume a process by PID. Must be called with _lock held."""
+        """Resume a suspended process."""
         try:
             proc = psutil.Process(pid)
+            log.info(f"Resuming process: {proc.name()} (PID {pid})")
             proc.resume()
             self._suspended.pop(pid, None)
             log.info("Resumed PID %d", pid)

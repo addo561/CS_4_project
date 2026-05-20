@@ -17,6 +17,11 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
+# Add parent directory (src/) to sys.path so config can be found when run directly
+_PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT_DIR not in sys.path:
+    sys.path.insert(0, _PARENT_DIR)
+
 from config import (
     RAW_CSV, CLEAN_CSV, SCALER_PATH, FEATURE_COLS,
     WINDOW_SIZE, STEP_SIZE, LABEL_HORIZON,
