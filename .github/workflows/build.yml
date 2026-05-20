@@ -47,6 +47,18 @@ jobs:
             iconutil -c icns "$ICONSET" -o assets/icon.icns 2>/dev/null || true
           fi
 
+      - name: Create version.txt
+        shell: bash
+        run: |
+          mkdir -p src/assets
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+            echo "$TAG" > src/assets/version.txt
+          else
+            echo "v2.3.4" > src/assets/version.txt
+          fi
+          echo "Built with version: $(cat src/assets/version.txt)"
+
       - name: Build .app with PyInstaller
         run: pyinstaller SystemResourceOptimizer.spec --clean -y
 
@@ -89,6 +101,19 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install flet flet-desktop psutil numpy scikit-learn onnxruntime PyQt6 pyqtgraph plyer pyinstaller pillow
+
+      - name: Create version.txt
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src/assets
+          $ref = "${{ github.ref }}"
+          if ($ref -like "refs/tags/*") {
+            $tag = "${{ github.ref_name }}"
+            Set-Content -Path src/assets/version.txt -Value $tag
+          } else {
+            Set-Content -Path src/assets/version.txt -Value "v2.3.4"
+          }
+          Write-Host "Built with version: $(Get-Content src/assets/version.txt)"
 
       - name: Build .exe with PyInstaller
         run: pyinstaller SystemResourceOptimizer.spec --clean -y

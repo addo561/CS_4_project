@@ -26,6 +26,28 @@ CLEAN_CSV   = os.path.join(DATA_DIR, "telemetry_clean.csv")
 SCALER_PATH = os.path.join(MODEL_DIR, "scaler.pkl")
 MODEL_PATH  = os.path.join(MODEL_DIR, "gru_quantized.onnx")
 
+def get_app_version() -> str:
+    """Get app version, looking for a bundled or local version.txt first."""
+    paths_to_check = [
+        os.path.join(BASE_DIR, "assets", "version.txt"),
+        os.path.join(os.path.dirname(BASE_DIR), "src", "assets", "version.txt"),
+        os.path.join(BASE_DIR, "version.txt"),
+    ]
+    for p in paths_to_check:
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    ver = f.read().strip()
+                    if ver:
+                        if not ver.lower().startswith("v"):
+                            ver = "v" + ver
+                        return f"{ver} (Stable)"
+            except Exception:
+                pass
+    return "v2.3.4 (Stable)"
+
+VERSION = get_app_version()
+
 # ── Local (per-machine) calibration scaler ───────────────────────────────────
 # Saved in the user's home directory so it persists across app updates and
 # works on any machine without touching the bundled model files.

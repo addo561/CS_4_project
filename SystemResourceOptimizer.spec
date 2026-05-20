@@ -11,13 +11,27 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = os.path.dirname(os.path.abspath(SPEC))   # Final_year/
 
+# Read version dynamically from version.txt if it exists
+APP_VERSION = "2.3.4"
+version_file = os.path.join(ROOT, "src", "assets", "version.txt")
+if os.path.isfile(version_file):
+    try:
+        with open(version_file, "r") as f:
+            v_val = f.read().strip()
+            if v_val:
+                if v_val.startswith("v") or v_val.startswith("V"):
+                    APP_VERSION = v_val[1:]
+                else:
+                    APP_VERSION = v_val
+    except Exception:
+        pass
+
 # ── Source files to add as data (non-Python assets) ──────────────────────────
 added_files = [
     # Model + scaler
     (os.path.join(ROOT, "src", "models"), "models"),
-    # App icon
-    (os.path.join(ROOT, "src", "assets", "icon.icns"),  "assets"),
-    (os.path.join(ROOT, "src", "assets", "icon_proper.png"), "assets"),
+    # App assets (including icons and version.txt)
+    (os.path.join(ROOT, "src", "assets"), "assets"),
 ]
 added_files += collect_data_files("flet")
 added_files += collect_data_files("flet-desktop")
@@ -135,8 +149,8 @@ if platform.system() == 'Darwin':
         info_plist={
             "CFBundleName":             "System Resource Optimizer",
             "CFBundleDisplayName":      "System Resource Optimizer",
-            "CFBundleVersion":          "1.0.0",
-            "CFBundleShortVersionString": "1.0.0",
+            "CFBundleVersion":          APP_VERSION,
+            "CFBundleShortVersionString": APP_VERSION,
             "NSHighResolutionCapable":  True,
             "NSHumanReadableCopyright": "© 2026 KNUST Group 4",
             "LSMinimumSystemVersion":   "10.14",

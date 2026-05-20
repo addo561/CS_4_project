@@ -28,7 +28,7 @@ if _DIR not in sys.path:
     sys.path.insert(0, _DIR)
 
 from core.pipeline import Pipeline, PipelineResult
-from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC
+from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC, VERSION
 
 # Background process scanner - prevents UI freezing
 _process_cache = {
@@ -871,7 +871,7 @@ def build_settings_view(autopilot_status: ft.Text) -> ft.Column:
                                 ft.Column(
                                     [
                                         body_text("Software Version", size=11, color=MUTED),
-                                        body_text("v2.3.3 (Stable)", size=13, weight=ft.FontWeight.W_600, color=ACCENT),
+                                        body_text(VERSION, size=13, weight=ft.FontWeight.W_600, color=ACCENT),
                                     ],
                                     col={"xs": 6, "md": 3},
                                 ),
