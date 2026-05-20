@@ -288,6 +288,14 @@ class DashboardUI:
     an_cpu_live: ft.Text
     an_mem_live: ft.Text
     autopilot_status: ft.Text
+    an_cpu_bar: Optional[ft.ProgressBar] = None
+    an_cpu_weight_text: Optional[ft.Text] = None
+    an_mem_bar: Optional[ft.ProgressBar] = None
+    an_mem_weight_text: Optional[ft.Text] = None
+    an_temp_bar: Optional[ft.ProgressBar] = None
+    an_temp_weight_text: Optional[ft.Text] = None
+    an_swap_bar: Optional[ft.ProgressBar] = None
+    an_swap_weight_text: Optional[ft.Text] = None
     last_result: Optional[PipelineResult] = None
 
 
@@ -337,6 +345,7 @@ def build_sidebar(on_nav: Callable[[str], None], active: str = "dashboard") -> f
                 section_title("Navigation"),
                 nav_item("Dashboard", ft.Icons.DASHBOARD, "dashboard"),
                 nav_item("AI Analytics", ft.Icons.INSIGHTS, "analytics"),
+                nav_item("Science Hub", ft.Icons.SCHOOL, "science_hub"),
                 nav_item("Settings", ft.Icons.SETTINGS, "settings"),
                 ft.Container(expand=True),
                 body_text("Next-Gen · Flet", size=10, color=MUTED),
@@ -392,41 +401,53 @@ def _ai_gauge_panel(
 
 
 def build_analytics_view(ui: DashboardUI) -> ft.Column:
-    # Feature importance visual items (gorgeous mock bars with distinct colors)
+    # Feature importance visual items (gorgeous dynamic XAI bars)
+    ui.an_cpu_weight_text = body_text("42% weight", size=11, color=ACCENT)
+    ui.an_cpu_bar = ft.ProgressBar(value=0.42, color=ACCENT, bgcolor=CARD_ALT, height=6, border_radius=3)
+    
+    ui.an_mem_weight_text = body_text("28% weight", size=11, color=WARN)
+    ui.an_mem_bar = ft.ProgressBar(value=0.28, color=WARN, bgcolor=CARD_ALT, height=6, border_radius=3)
+    
+    ui.an_temp_weight_text = body_text("18% weight", size=11, color=CRIT)
+    ui.an_temp_bar = ft.ProgressBar(value=0.18, color=CRIT, bgcolor=CARD_ALT, height=6, border_radius=3)
+    
+    ui.an_swap_weight_text = body_text("12% weight", size=11, color=ACCENT)
+    ui.an_swap_bar = ft.ProgressBar(value=0.12, color=ACCENT, bgcolor=CARD_ALT, height=6, border_radius=3)
+
     feature_importance = ft.Column(
         [
             ft.Row(
                 [
                     body_text("CPU Utilization (raw/percent)", size=12, color=TEXT, weight=ft.FontWeight.W_500),
                     ft.Container(expand=True),
-                    body_text("42% weight", size=11, color=ACCENT),
+                    ui.an_cpu_weight_text,
                 ]
             ),
-            ft.ProgressBar(value=0.42, color=ACCENT, bgcolor=CARD_ALT, height=6, border_radius=3),
+            ui.an_cpu_bar,
             ft.Row(
                 [
                     body_text("Memory Pressure (used/percent)", size=12, color=TEXT, weight=ft.FontWeight.W_500),
                     ft.Container(expand=True),
-                    body_text("28% weight", size=11, color=WARN),
+                    ui.an_mem_weight_text,
                 ]
             ),
-            ft.ProgressBar(value=0.28, color=WARN, bgcolor=CARD_ALT, height=6, border_radius=3),
+            ui.an_mem_bar,
             ft.Row(
                 [
                     body_text("CPU Thermal Temperature (°C)", size=12, color=TEXT, weight=ft.FontWeight.W_500),
                     ft.Container(expand=True),
-                    body_text("18% weight", size=11, color=CRIT),
+                    ui.an_temp_weight_text,
                 ]
             ),
-            ft.ProgressBar(value=0.18, color=CRIT, bgcolor=CARD_ALT, height=6, border_radius=3),
+            ui.an_temp_bar,
             ft.Row(
                 [
                     body_text("Swap space (percent)", size=12, color=TEXT, weight=ft.FontWeight.W_500),
                     ft.Container(expand=True),
-                    body_text("12% weight", size=11, color=ACCENT),
+                    ui.an_swap_weight_text,
                 ]
             ),
-            ft.ProgressBar(value=0.12, color=ACCENT, bgcolor=CARD_ALT, height=6, border_radius=3),
+            ui.an_swap_bar,
         ],
         spacing=8,
     )
@@ -685,7 +706,371 @@ def build_analytics_view(ui: DashboardUI) -> ft.Column:
     )
 
 
-def build_settings_view(autopilot_status: ft.Text) -> ft.Column:
+def build_science_hub_view() -> ft.Column:
+    import os
+    assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+    
+    def get_eq_control(filename: str, fallback_text: str) -> ft.Control:
+        path = os.path.join(assets_dir, filename)
+        if os.path.isfile(path):
+            return ft.Container(
+                content=ft.Image(src=path, height=72, fit=ft.BoxFit.CONTAIN),
+                padding=ft.Padding.only(left=16, top=6, bottom=6),
+            )
+        else:
+            return body_text(fallback_text, size=13, weight=ft.FontWeight.W_600, color=TEXT, font_family="monospace")
+
+    # Math formulas and academic model equations
+    gru_formulas = ft.Column(
+        [
+            body_text("Gated Recurrent Unit (GRU) Cell Equations", size=14, weight=ft.FontWeight.BOLD, color=ACCENT),
+            ft.Divider(height=1, color=BORDER),
+            body_text("SRO's proactive resource prediction is driven by a deep Gated Recurrent Unit (GRU) neural network, chosen for its excellent balance of temporal memory representation and low latency constraints. The hidden state update cycle of the GRU is mathematically defined as follows:", size=12, color=TEXT),
+            
+            # Equation 1: Reset Gate
+            ft.Container(
+                content=ft.Column([
+                    body_text("1. Reset Gate Equation (r_t)", size=12, color=MUTED, weight=ft.FontWeight.BOLD),
+                    get_eq_control("eq_reset_gate.png", "   r_t = σ( W_r · x_t  +  U_r · h_{t-1}  +  b_r )"),
+                    body_text("   Controls how much of the past hidden state h_{t-1} to forget or keep. σ represents the sigmoid activation function mapping values between 0 and 1.", size=11, color=MUTED),
+                ]),
+                bgcolor=CARD_ALT,
+                padding=10,
+                border_radius=8,
+            ),
+            
+            # Equation 2: Update Gate
+            ft.Container(
+                content=ft.Column([
+                    body_text("2. Update Gate Equation (z_t)", size=12, color=MUTED, weight=ft.FontWeight.BOLD),
+                    get_eq_control("eq_update_gate.png", "   z_t = σ( W_z · x_t  +  U_z · h_{t-1}  +  b_z )"),
+                    body_text("   Decides how much of the new candidate information to carry forward into the next time-step, helping prevent vanishing gradient problems.", size=11, color=MUTED),
+                ]),
+                bgcolor=CARD_ALT,
+                padding=10,
+                border_radius=8,
+            ),
+            
+            # Equation 3: Candidate Hidden State
+            ft.Container(
+                content=ft.Column([
+                    body_text("3. Candidate Hidden State Equation (~h_t)", size=12, color=MUTED, weight=ft.FontWeight.BOLD),
+                    get_eq_control("eq_candidate_state.png", "   ~h_t = tanh( W_h · x_t  +  U_h · ( r_t ⊙ h_{t-1} )  +  b_h )"),
+                    body_text("   Calculates the new candidate memory state. The reset gate r_t acts as a gating filter on the historical hidden state h_{t-1}. ⊙ is the Hadamard (element-wise) product.", size=11, color=MUTED),
+                ]),
+                bgcolor=CARD_ALT,
+                padding=10,
+                border_radius=8,
+            ),
+            
+            # Equation 4: Final Hidden State
+            ft.Container(
+                content=ft.Column([
+                    body_text("4. Hidden State Update Equation (h_t)", size=12, color=MUTED, weight=ft.FontWeight.BOLD),
+                    get_eq_control("eq_final_state.png", "   h_t = ( 1 - z_t ) ⊙ h_{t-1}  +  z_t ⊙ ~h_t"),
+                    body_text("   Synthesizes the final output vector by linearly interpolating between the old state h_{t-1} and the new candidate state ~h_t based on the update gate z_t.", size=11, color=MUTED),
+                ]),
+                bgcolor=CARD_ALT,
+                padding=10,
+                border_radius=8,
+            ),
+        ],
+        spacing=12,
+    )
+    
+    quantization_formulas = ft.Column(
+        [
+            body_text("Dynamic INT8 Post-Training Quantization", size=14, weight=ft.FontWeight.BOLD, color=WARN),
+            ft.Divider(height=1, color=BORDER),
+            body_text("To achieve a 75% reduction in model size (~0.68 MB to ~0.17 MB) for frictionless background execution on consumer hardware, SRO employs uniform dynamic symmetric INT8 quantization on its weights, mapping float32 weights to 8-bit integers:", size=12, color=TEXT),
+            
+            ft.Container(
+                content=ft.Column([
+                    body_text("Linear Quantization Formula (Float → INT8)", size=12, color=MUTED, weight=ft.FontWeight.BOLD),
+                    get_eq_control("eq_quantization.png", "   q = round( x / S ) + Z"),
+                    body_text("   Where x is the float32 input weight, q is the quantized 8-bit integer weight, S is the Scale factor (float), and Z is the Zero-point shift (integer). For symmetric quantization, Z is set to 0.", size=11, color=MUTED),
+                ]),
+                bgcolor=CARD_ALT,
+                padding=10,
+                border_radius=8,
+            ),
+            ft.Container(
+                content=ft.Column([
+                    body_text("Dequantization Formula (Inference Phase)", size=12, color=MUTED, weight=ft.FontWeight.BOLD),
+                    get_eq_control("eq_dequantization.png", "   x ≈ S · ( q - Z )"),
+                    body_text("   During runtime, float values are reconstructed before math operations using the dynamic scale. This yields significant runtime speedups while maintaining high academic forecasting accuracy.", size=11, color=MUTED),
+                ]),
+                bgcolor=CARD_ALT,
+                padding=10,
+                border_radius=8,
+            ),
+        ],
+        spacing=12,
+    )
+    
+    thermal_formulas = ft.Column(
+        [
+            body_text("ACPI Thermal Lag & Fallback Simulator", size=14, weight=ft.FontWeight.BOLD, color=CRIT),
+            ft.Divider(height=1, color=BORDER),
+            body_text("In virtual machines, cloud instances, or restricted systems where raw hardware sensors are inaccessible, SRO automatically deploys a first-order thermal lag physical simulation derived from Newton's Law of Cooling:", size=12, color=TEXT),
+            
+            ft.Container(
+                content=ft.Column([
+                    body_text("First-Order Thermal Lag Equation", size=12, color=MUTED, weight=ft.FontWeight.BOLD),
+                    get_eq_control("eq_thermal_lag.png", "   T_t = T_{t-1}  +  k · ( CPU_t - T_{t-1} ) · Δt"),
+                    body_text("   Where T_t is the simulated CPU temperature at time t, T_{t-1} is the temperature at the previous second, CPU_t is the raw CPU utilization percentage, k is the dissipation coefficient (constant), and Δt is the poll rate (1.0s). This provides a reliable reactive protection fallback.", size=11, color=MUTED),
+                ]),
+                bgcolor=CARD_ALT,
+                padding=10,
+                border_radius=8,
+            ),
+        ],
+        spacing=12,
+    )
+
+    # Compile the right-side benchmarking section
+    report_md_content = "Loading empirical benchmark metrics..."
+    report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "benchmark_report.md")
+    if not os.path.isfile(report_path):
+        report_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "benchmark_report.md")
+    if not os.path.isfile(report_path):
+        report_path = os.path.join("/Users/user/Desktop/Final_year/src/docs/benchmark_report.md")
+    if not os.path.isfile(report_path):
+        report_path = os.path.join("/Users/user/Desktop/Final_year/docs/benchmark_report.md")
+
+    if os.path.isfile(report_path):
+        try:
+            with open(report_path, "r", encoding="utf-8") as file:
+                report_md_content = file.read()
+        except Exception as e:
+            report_md_content = f"Error reading benchmark report: {e}"
+            
+    # Chart image
+    chart_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "benchmark_charts.png")
+    if not os.path.isfile(chart_path):
+        chart_path = "/Users/user/Desktop/Final_year/src/assets/benchmark_charts.png"
+        
+    if os.path.isfile(chart_path):
+        chart_image = ft.Image(src=chart_path, width=540, fit=ft.BoxFit.CONTAIN, border_radius=8)
+    else:
+        chart_image = ft.Container(
+            content=body_text("No benchmark chart image generated yet. Rerun benchmark suite in settings.", color=MUTED, size=11),
+            bgcolor=CARD_ALT,
+            padding=20,
+            border_radius=8,
+            alignment=ft.alignment.center,
+        )
+
+    right_rail_content = ft.Column(
+        [
+            body_text("Empirical Performance Diagnostics", size=14, weight=ft.FontWeight.BOLD, color=ACCENT),
+            ft.Divider(height=1, color=BORDER),
+            body_text("Comparative performance analysis profiling Accuracy, F1-Score, ROC-AUC, inference latency, and disk memory footprint.", size=12, color=TEXT),
+            chart_image,
+            ft.Divider(height=1, color=BORDER),
+            ft.Markdown(report_md_content, selectable=True, extension_set=ft.MarkdownExtensionSet.GITHUB_WEB),
+        ],
+        spacing=12,
+    )
+
+    return ft.Column(
+        [
+            # Header
+            ft.Row(
+                [
+                    ft.Icon(ft.Icons.SCHOOL, color=ACCENT, size=28),
+                    ft.Column(
+                        [
+                            body_text("Science & Academic Hub", size=22, weight=ft.FontWeight.BOLD),
+                            body_text("SRO core mathematical equations, quantization models, and comparative evaluation telemetry", size=12, color=MUTED),
+                        ],
+                        spacing=0,
+                    ),
+                ],
+                spacing=12,
+            ),
+            ft.Divider(height=1, color=BORDER),
+            
+            # Scrollable main responsive grid
+            ft.Row(
+                [
+                    ft.Column(
+                        [
+                            card(gru_formulas, padding=16),
+                            card(quantization_formulas, padding=16),
+                            card(thermal_formulas, padding=16),
+                        ],
+                        expand=True,
+                        spacing=16,
+                    ),
+                    ft.Column(
+                        [
+                            card(right_rail_content, padding=16),
+                        ],
+                        expand=True,
+                        spacing=16,
+                    ),
+                ],
+                expand=True,
+                spacing=16,
+                vertical_alignment=ft.CrossAxisAlignment.STRETCH,
+            )
+        ],
+        spacing=16,
+        scroll=ft.ScrollMode.AUTO,
+        expand=True,
+    )
+
+
+def build_settings_view(autopilot_status: ft.Text, page: Optional[ft.Page] = None) -> ft.Column:
+    from config import load_user_settings, save_user_settings, PROFILES, load_user_whitelist, save_user_whitelist, POLL_INTERVAL_SEC, CALIBRATION_SECONDS
+
+    # 1. Performance Profiles & Radio Selection
+    settings = load_user_settings()
+    current_profile = settings.get("profile", "Balanced")
+
+    active_profile_name = ft.Text(f"Current Profile: {current_profile}", color=ACCENT, size=14, weight=ft.FontWeight.W_600)
+    profile_details = ft.Text("", color=MUTED, size=12)
+
+    def update_profile_details(prof_name):
+        prof = PROFILES.get(prof_name, PROFILES["Balanced"])
+        active_profile_name.value = f"Current Profile: {prof_name}"
+        profile_details.value = (
+            f"Active Strategy Thresholds:\n"
+            f"• CPU Bottleneck Threshold: {prof.get('CPU_BOTTLENECK_PCT')}% \n"
+            f"• Memory Bottleneck Threshold: {prof.get('MEM_BOTTLENECK_PCT')}% \n"
+            f"• Temperature Warning Limit: {prof.get('TEMP_BOTTLENECK_C')}°C \n"
+            f"• Prediction Confidence Required: {prof.get('CONFIDENCE_THRESHOLD'):.0%}"
+        )
+        if page:
+            page.update()
+
+    update_profile_details(current_profile)
+
+    def on_profile_change(e):
+        selected_prof = e.control.value
+        save_user_settings({"profile": selected_prof})
+        update_profile_details(selected_prof)
+        if page:
+            page.snack_bar = ft.SnackBar(
+                ft.Text(f"Settings applied: Performance profile switched to {selected_prof}", color=TEXT),
+                bgcolor=CARD_ALT,
+            )
+            page.snack_bar.open = True
+            page.update()
+
+    profile_radio = ft.RadioGroup(
+        content=ft.Column(
+            [
+                ft.Radio(value="Eco", label="Eco Mode (Conservation - lower thresholds, higher frequency)", fill_color=ACCENT),
+                ft.Radio(value="Balanced", label="Balanced Mode (Default standard optimized strategy)", fill_color=ACCENT),
+                ft.Radio(value="Gaming", label="Gaming / Performance Mode (Power - shields gaming, restricts interference)", fill_color=ACCENT),
+            ],
+            spacing=8,
+        ),
+        value=current_profile,
+        on_change=on_profile_change,
+    )
+
+    # 2. Interactive Custom Whitelist Manager
+    custom_list_col = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO, height=180)
+
+    def refresh_whitelist():
+        custom_list_col.controls.clear()
+        whitelist = load_user_whitelist()
+        if not whitelist:
+            custom_list_col.controls.append(
+                ft.Text("No custom processes whitelisted yet.", color=MUTED, size=12, italic=True)
+            )
+        else:
+            for proc in sorted(whitelist):
+                def make_remove_cb(p=proc):
+                    return lambda _: remove_proc(p)
+                custom_list_col.controls.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Icon(ft.Icons.SHIELD, color=ACCENT, size=14),
+                                        body_text(proc, size=12, weight=ft.FontWeight.W_500),
+                                    ],
+                                    spacing=8,
+                                ),
+                                ft.IconButton(
+                                    icon=ft.Icons.DELETE_OUTLINE,
+                                    icon_color=CRIT,
+                                    icon_size=16,
+                                    on_click=make_remove_cb(),
+                                    tooltip="Remove process",
+                                )
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        ),
+                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                        bgcolor=CARD,
+                        border_radius=6,
+                        border=ft.Border.all(1, BORDER),
+                    )
+                )
+        if page:
+            page.update()
+
+    def add_proc(e):
+        val = proc_input.value.strip().lower()
+        if not val:
+            return
+        whitelist = load_user_whitelist()
+        if val in whitelist:
+            if page:
+                page.snack_bar = ft.SnackBar(ft.Text(f"'{val}' is already whitelisted.", color=WARN), bgcolor=CARD_ALT)
+                page.snack_bar.open = True
+                page.update()
+            return
+        whitelist.add(val)
+        save_user_whitelist(whitelist)
+        proc_input.value = ""
+        refresh_whitelist()
+        if page:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Added '{val}' to custom whitelist.", color=ACCENT), bgcolor=CARD_ALT)
+            page.snack_bar.open = True
+            page.update()
+
+    def remove_proc(val):
+        whitelist = load_user_whitelist()
+        if val in whitelist:
+            whitelist.remove(val)
+            save_user_whitelist(whitelist)
+        refresh_whitelist()
+        if page:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Removed '{val}' from custom whitelist.", color=WARN), bgcolor=CARD_ALT)
+            page.snack_bar.open = True
+            page.update()
+
+    proc_input = ft.TextField(
+        hint_text="e.g. chrome.exe, spotify",
+        hint_style=ft.TextStyle(color=MUTED, size=12),
+        text_style=ft.TextStyle(color=TEXT, size=13),
+        bgcolor=BG,
+        border_color=BORDER,
+        border_radius=8,
+        height=38,
+        expand=True,
+        on_submit=add_proc,
+    )
+
+    add_button = ft.ElevatedButton(
+        content=body_text("Add", size=12, weight=ft.FontWeight.BOLD, color=BG),
+        style=ft.ButtonStyle(
+            bgcolor=ACCENT,
+            shape=ft.RoundedRectangleBorder(radius=8),
+        ),
+        on_click=add_proc,
+        height=38,
+    )
+
+    refresh_whitelist()
+
     return ft.Column(
         [
             # Header
@@ -707,7 +1092,7 @@ def build_settings_view(autopilot_status: ft.Text) -> ft.Column:
             # Two Column Responsive Row
             ft.ResponsiveRow(
                 [
-                    # Left column: Auto-Pilot & Controls
+                    # Left column: Auto-Pilot & Controls and Performance Profiles
                     ft.Column(
                         [
                             card(
@@ -758,33 +1143,111 @@ def build_settings_view(autopilot_status: ft.Text) -> ft.Column:
                                 ),
                                 padding=16,
                             ),
-                        ],
-                        col={"xs": 12, "md": 6},
-                    ),
-
-                    # Right column: Detection Thresholds
-                    ft.Column(
-                        [
+                            
+                            # Performance Profiles card
                             card(
                                 ft.Column(
                                     [
                                         ft.Row(
                                             [
                                                 ft.Icon(ft.Icons.TUNE, color=WARN, size=18),
-                                                section_title("ENGINE THRESHOLDS"),
+                                                section_title("PERFORMANCE PROFILES"),
                                             ],
                                             spacing=8,
                                         ),
                                         ft.Container(
                                             content=ft.Column(
                                                 [
+                                                    body_text("Select an optimization preset to dynamically configure bottleneck thresholds and agent confidence requirements:", size=12, color=MUTED),
+                                                    ft.Divider(height=8, color=BORDER),
+                                                    profile_radio,
+                                                    ft.Divider(height=8, color=BORDER),
+                                                    active_profile_name,
+                                                    ft.Container(
+                                                        content=profile_details,
+                                                        bgcolor=BG,
+                                                        padding=10,
+                                                        border_radius=6,
+                                                        border=ft.Border.all(1, BORDER),
+                                                    ),
+                                                ],
+                                                spacing=10,
+                                            ),
+                                            bgcolor=CARD_ALT,
+                                            padding=14,
+                                            border_radius=8,
+                                            border=ft.Border.all(1, BORDER),
+                                        ),
+                                    ],
+                                    spacing=12,
+                                ),
+                                padding=16,
+                            ),
+                        ],
+                        col={"xs": 12, "md": 6},
+                    ),
+
+                    # Right column: Whitelist Manager & Static Engine Thresholds
+                    ft.Column(
+                        [
+                            # Whitelist Manager Card
+                            card(
+                                ft.Column(
+                                    [
+                                        ft.Row(
+                                            [
+                                                ft.Icon(ft.Icons.SHIELD, color=ACCENT, size=18),
+                                                section_title("CUSTOM PROCESS WHITELIST"),
+                                            ],
+                                            spacing=8,
+                                        ),
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
+                                                    body_text("Processes listed here will NEVER be suspended, even under heavy CPU/memory bottlenecks:", size=12, color=MUTED),
+                                                    ft.Divider(height=8, color=BORDER),
+                                                    
+                                                    # Input row
                                                     ft.Row(
                                                         [
-                                                            ft.Icon(ft.Icons.SPEED, size=16, color=ACCENT),
-                                                            body_text(f"Confidence Threshold: {CONFIDENCE_THRESHOLD:.0%}", size=13, weight=ft.FontWeight.W_500),
+                                                            proc_input,
+                                                            add_button,
                                                         ],
                                                         spacing=8,
                                                     ),
+                                                    
+                                                    ft.Divider(height=8, color=BORDER),
+                                                    
+                                                    # Custom list column
+                                                    custom_list_col,
+                                                ],
+                                                spacing=10,
+                                            ),
+                                            bgcolor=CARD_ALT,
+                                            padding=14,
+                                            border_radius=8,
+                                            border=ft.Border.all(1, BORDER),
+                                        ),
+                                    ],
+                                    spacing=12,
+                                ),
+                                padding=16,
+                            ),
+                            
+                            # Engine Settings Card (shows global/static specs)
+                            card(
+                                ft.Column(
+                                    [
+                                        ft.Row(
+                                            [
+                                                ft.Icon(ft.Icons.SETTINGS_SYSTEM_DAYDREAM, color=ACCENT, size=18),
+                                                section_title("SYSTEM ENGINE SPECIFICATIONS"),
+                                            ],
+                                            spacing=8,
+                                        ),
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
                                                     ft.Row(
                                                         [
                                                             ft.Icon(ft.Icons.CALENDAR_TODAY, size=16, color=WARN),
@@ -1160,7 +1623,7 @@ def build_dashboard_content(
         autopilot_status=autopilot_status,
     )
     analytics_view = build_analytics_view(ui)
-    settings_view = build_settings_view(autopilot_status)
+    settings_view = build_settings_view(autopilot_status, page)
     return ui, dashboard_view, analytics_view, settings_view, right_rail
 
 
@@ -1222,6 +1685,22 @@ def _update_analytics(ui: DashboardUI, res: Optional[PipelineResult] = None) -> 
     ui.an_cpu_live.value = f"CPU: {cpu:.1f}%"
     ui.an_mem_live.value = f"Memory: {mem:.1f}%"
 
+    # Dynamic XAI progress bars & percentage labels updates
+    if res is not None and not res.calibrating and getattr(res, "attributions", None) is not None:
+        attrs = res.attributions
+        if ui.an_cpu_bar:
+            ui.an_cpu_bar.value = attrs[0]
+            ui.an_cpu_weight_text.value = f"{int(attrs[0] * 100)}% weight"
+        if ui.an_mem_bar:
+            ui.an_mem_bar.value = attrs[1]
+            ui.an_mem_weight_text.value = f"{int(attrs[1] * 100)}% weight"
+        if ui.an_temp_bar:
+            ui.an_temp_bar.value = attrs[2]
+            ui.an_temp_weight_text.value = f"{int(attrs[2] * 100)}% weight"
+        if ui.an_swap_bar:
+            ui.an_swap_bar.value = attrs[3]
+            ui.an_swap_weight_text.value = f"{int(attrs[3] * 100)}% weight"
+
 
 def run_app(page: ft.Page) -> None:
     page.title = "System Resource Optimizer"
@@ -1236,9 +1715,11 @@ def run_app(page: ft.Page) -> None:
     ui_callbacks = {}
     ui, dashboard_view, analytics_view, settings_view, right_rail = build_dashboard_content(page, ui_callbacks)
 
+    science_hub_view = build_science_hub_view()
     views = {
         "dashboard": dashboard_view,
         "analytics": analytics_view,
+        "science_hub": science_hub_view,
         "settings": settings_view,
     }
     content_host = ft.Container(
@@ -1269,6 +1750,10 @@ def run_app(page: ft.Page) -> None:
         if key not in views:
             return
         set_active_nav(key)
+        if key == "science_hub":
+            views["science_hub"] = build_science_hub_view()
+        elif key == "settings":
+            views["settings"] = build_settings_view(ui.autopilot_status, page)
         content_host.content = views[key]
         right_rail_host.visible = key == "dashboard"
         if key == "dashboard":
@@ -1299,6 +1784,11 @@ def run_app(page: ft.Page) -> None:
     flush_scheduled = False
     pipeline: Optional[Pipeline] = None
     ap_last_fire = 0.0
+    calib_stats = {
+        "cpu_min": 100.0, "cpu_max": 0.0,
+        "mem_min": 100.0, "mem_max": 0.0,
+        "temp_min": 200.0, "temp_max": 0.0
+    }
 
     def log(msg: str, color: str = ACCENT) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -1356,6 +1846,13 @@ def run_app(page: ft.Page) -> None:
         _update_analytics(ui, res)
 
         if res.calibrating:
+            calib_stats["cpu_min"] = min(calib_stats["cpu_min"], cpu)
+            calib_stats["cpu_max"] = max(calib_stats["cpu_max"], cpu)
+            calib_stats["mem_min"] = min(calib_stats["mem_min"], mem)
+            calib_stats["mem_max"] = max(calib_stats["mem_max"], mem)
+            if tmp > 0:
+                calib_stats["temp_min"] = min(calib_stats["temp_min"], tmp)
+                calib_stats["temp_max"] = max(calib_stats["temp_max"], tmp)
             # Managed by the calibs loop to display dynamic percentage.
             # Only initialize if we haven't started displaying progress yet.
             if ui.gauge_value.value in ("—", "…"):
@@ -1363,7 +1860,7 @@ def run_app(page: ft.Page) -> None:
                 ui.gauge_ring.color = WARN
                 ui.gauge_value.value = "0%"
                 ui.gauge_value.color = WARN
-                ui.gauge_insight.value = "Calibrating sensors"
+                ui.gauge_insight.value = "Calibrating sensors..."
                 ui.gauge_insight.color = WARN
         else:
             pct = int(res.confidence * 100)
@@ -1406,7 +1903,14 @@ def run_app(page: ft.Page) -> None:
         for elapsed, total in calibs:
             if elapsed != -1:
                 pct = min(100, max(1, int((elapsed / total) * 100)))
-                ui.gauge_insight.value = "Calibrating sensors"
+                t_min = calib_stats["temp_min"] if calib_stats["temp_min"] < 200 else 0.0
+                t_max = calib_stats["temp_max"]
+                ui.gauge_insight.value = (
+                    f"Calibrating telemetry...\n"
+                    f"CPU: {calib_stats['cpu_min']:.0f}%-{calib_stats['cpu_max']:.0f}% | "
+                    f"Mem: {calib_stats['mem_min']:.0f}%-{calib_stats['mem_max']:.0f}%\n"
+                    f"Temp: {t_min:.0f}°C-{t_max:.0f}°C"
+                )
                 ui.gauge_insight.color = WARN
                 ui.gauge_ring.value = elapsed / total
                 ui.gauge_ring.color = WARN

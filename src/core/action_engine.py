@@ -87,16 +87,23 @@ class ActionEngine:
     def evaluate(self, confidence: float, predicted_cpu: float, predicted_mem: float) -> ActionResult:
         """
         Called every inference cycle.  Suspends top memory consumers when
-        confidence crosses CONFIDENCE_THRESHOLD.
+        confidence crosses the profile's confidence threshold.
         """
+        from config import load_user_settings, PROFILES
+        
+        settings = load_user_settings()
+        profile_name = settings.get("profile", "Balanced")
+        profile = PROFILES.get(profile_name, PROFILES["Balanced"])
+        current_threshold = profile.get("CONFIDENCE_THRESHOLD", CONFIDENCE_THRESHOLD)
+
         result = ActionResult(confidence=confidence)
 
-        if confidence < CONFIDENCE_THRESHOLD:
-            result.message = (f"Confidence {confidence:.2f} below threshold "
-                              f"{CONFIDENCE_THRESHOLD}. No action.")
+        if confidence < current_threshold:
+            result.message = (f"Confidence {confidence:.2f} below {profile_name} threshold "
+                              f"{current_threshold}. No action.")
             return result
 
-        reason = (f"Bottleneck predicted (conf={confidence:.2f}, "
+        reason = (f"Bottleneck predicted [{profile_name}] (conf={confidence:.2f}, "
                   f"CPU={predicted_cpu:.1f}%, MEM={predicted_mem:.1f}%)")
         log.info("Action threshold crossed: %s", reason)
 
@@ -253,6 +260,14 @@ class ActionEngine:
         Checks whitelist AND skips root/SYSTEM account processes.
         """
         try:
+            name = proc.name().lower()
+            
+            # Check user defined whitelist
+            from config import load_user_whitelist
+            user_whitelist = load_user_whitelist()
+            if name in {w.lower() for w in user_whitelist}:
+                return False
+
             if self._is_system_process(proc):
                 return False
 

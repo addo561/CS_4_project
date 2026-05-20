@@ -159,3 +159,77 @@ PROCESS_WHITELIST = {
     "explorer.exe", "dwm.exe", "taskmgr.exe", "pythonw.exe", "python.exe",
     "optimizer.exe",  # our own process
 }
+
+# ── Dynamic Performance Profiles ──────────────────────────────────────────────
+PROFILES = {
+    "Eco": {
+        "CPU_BOTTLENECK_PCT": 80.0,
+        "MEM_BOTTLENECK_PCT": 75.0,
+        "TEMP_BOTTLENECK_C": 75.0,
+        "CONFIDENCE_THRESHOLD": 0.70,
+    },
+    "Balanced": {
+        "CPU_BOTTLENECK_PCT": 90.0,
+        "MEM_BOTTLENECK_PCT": 85.0,
+        "TEMP_BOTTLENECK_C": 85.0,
+        "CONFIDENCE_THRESHOLD": 0.80,
+    },
+    "Gaming": {
+        "CPU_BOTTLENECK_PCT": 96.0,
+        "MEM_BOTTLENECK_PCT": 92.0,
+        "TEMP_BOTTLENECK_C": 90.0,
+        "CONFIDENCE_THRESHOLD": 0.90,
+    }
+}
+
+import json
+
+USER_WHITELIST_PATH = os.path.join(LOCAL_SCALER_DIR, "user_whitelist.json") if LOCAL_SCALER_DIR else ""
+SETTINGS_PATH = os.path.join(LOCAL_SCALER_DIR, "user_settings.json") if LOCAL_SCALER_DIR else ""
+
+def load_user_whitelist() -> set[str]:
+    """Loads user whitelist from ~/.sro_optimizer/user_whitelist.json"""
+    if USER_WHITELIST_PATH and os.path.isfile(USER_WHITELIST_PATH):
+        try:
+            with open(USER_WHITELIST_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(name.lower().strip() for name in data)
+        except Exception:
+            pass
+    return set()
+
+def save_user_whitelist(whitelist: set[str]) -> bool:
+    """Saves user whitelist to ~/.sro_optimizer/user_whitelist.json"""
+    if not USER_WHITELIST_PATH:
+        return False
+    try:
+        with open(USER_WHITELIST_PATH, "w", encoding="utf-8") as f:
+            json.dump(list(sorted(whitelist)), f, indent=4)
+        return True
+    except Exception:
+        return False
+
+def load_user_settings() -> dict:
+    """Loads settings like active performance profile."""
+    defaults = {"profile": "Balanced"}
+    if SETTINGS_PATH and os.path.isfile(SETTINGS_PATH):
+        try:
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {**defaults, **data}
+        except Exception:
+            pass
+    return defaults
+
+def save_user_settings(settings: dict) -> bool:
+    """Saves settings to file."""
+    if not SETTINGS_PATH:
+        return False
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=4)
+        return True
+    except Exception:
+        return False
