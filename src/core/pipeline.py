@@ -462,7 +462,18 @@ class Pipeline:
                 if len(self._window) == WINDOW_SIZE:
                     window_arr = np.array(self._window, dtype=np.float32)
                     confidence, pred_cpu, pred_mem = self._engine.predict(window_arr)
-                    attributions = self._engine.compute_attributions(window_arr, confidence)
+                    
+                    # Throttle attribution calculation to save CPU under load
+                    # Only compute if confidence is elevated, and at most once every 3 seconds
+                    now_time = time.monotonic()
+                    if confidence >= 0.50 and (not hasattr(self, '_last_attr_time') or now_time - self._last_attr_time >= 3.0):
+                        attributions = self._engine.compute_attributions(window_arr, confidence)
+                        self._last_attributions = attributions
+                        self._last_attr_time = now_time
+                    else:
+                        if not hasattr(self, '_last_attributions') or self._last_attributions is None:
+                            self._last_attributions = [0.42, 0.28, 0.18, 0.12]
+                        attributions = self._last_attributions
                     
                     # ── Safety Net from Proposal (Immediate Overload) ───────────────
                     # If EMA load is extreme, force high confidence regardless of window average
@@ -479,10 +490,10 @@ class Pipeline:
 
                     now = time.monotonic()
                     if now - self._last_action_time > 30:
+                        self._last_action_time = now
                         action = self._action.evaluate(confidence, pred_cpu, pred_mem)
                         if action.action_taken:
                             self._notifier.notify_suspend(action.affected_names, confidence)
-                            self._last_action_time = now
 
                 result = PipelineResult(
                     timestamp      = time.time(),

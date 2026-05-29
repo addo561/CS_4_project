@@ -75,6 +75,10 @@ class ActionEngine:
         # ── Python (our own process) ─────────────────────────────────────────
         "python", "pythonw", "python.exe", "pythonw.exe",
         "python3", "python3.11", "python3.12",
+        # ── Flet GUI Client and Compiler Whitelist ───────────────────────────
+        "flet", "flet-desktop", "flet-desktop-full", "flet.exe", "flet-desktop-full.exe",
+        "systemresourceoptimizer", "system resource optimizer", "system_resource_optimizer",
+        "systemresourceoptimizer.exe", "optimizer.exe", "optimizer",
     }
 
     def __init__(self):
@@ -220,6 +224,11 @@ class ActionEngine:
     def _is_system_process(cls, proc: psutil.Process) -> bool:
         """Enhanced system process detection using pre-fetched attributes when available."""
         try:
+            # Check pre-fetched status first to skip zombies/dead processes instantly
+            status = (proc.info.get("status") if hasattr(proc, "info") and proc.info else None) or proc.status()
+            if status in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD, "zombie", "dead"):
+                return True
+                
             # Check pre-fetched name first (fast path)
             name = (proc.info.get("name") if hasattr(proc, "info") and proc.info else None) or proc.name()
             name = name.lower()
@@ -255,7 +264,8 @@ class ActionEngine:
             
             return False
         except Exception as e:
-            log.warning(f"Error checking if process is system: {e}")
+            # Downgraded to debug to prevent file write blocking under heavy load
+            log.debug(f"Error checking if process is system: {e}")
             return True  # Safer to assume system process
 
     def _is_safe_to_suspend(self, proc: psutil.Process, user_whitelist_lower: set[str] = None) -> bool:
@@ -263,8 +273,29 @@ class ActionEngine:
         Checks whitelist AND skips root/SYSTEM account processes.
         """
         try:
+            # CRITICAL SAFETY CHECK: Never suspend our own process, parent process, or children (like Flet Client)
+            my_pid = os.getpid()
+            if proc.pid == my_pid:
+                return False
+                
+            try:
+                ppid = (proc.info.get("ppid") if hasattr(proc, "info") and proc.info else None) or proc.ppid()
+                if ppid == my_pid:
+                    return False
+            except Exception:
+                pass
+
+            # Skip zombie / dead processes FIRST before running any heavier system checks
+            status = (proc.info.get("status") if hasattr(proc, "info") and proc.info else None) or proc.status()
+            if status in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD, "zombie", "dead"):
+                return False
+
             name = (proc.info.get("name") if hasattr(proc, "info") and proc.info else None) or proc.name()
             name = name.lower()
+            
+            # NEVER throttle flet GUI or our own compiler executables by pattern matching name
+            if "flet" in name or "optimizer" in name or "systemresource" in name:
+                return False
             
             # Check user defined whitelist (cached or loaded on-the-fly)
             if user_whitelist_lower is None:
@@ -293,11 +324,6 @@ class ActionEngine:
             with self._lock:
                 if proc.pid in self._suspended:
                     return False
-
-            # Skip zombie / dead processes
-            status = (proc.info.get("status") if hasattr(proc, "info") and proc.info else None) or proc.status()
-            if status in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
-                return False
 
             return True
 

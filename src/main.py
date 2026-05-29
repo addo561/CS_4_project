@@ -194,8 +194,12 @@ class RollingChart:
             return 0.0
         return max(0.0, min(100.0, (value / self._value_max) * 100.0))
 
-    def push(self, value: float) -> None:
+    def push(self, value: float, redraw: bool = True) -> None:
         self.data.append(self._norm(value))
+        if redraw:
+            self._redraw()
+
+    def redraw(self) -> None:
         self._redraw()
 
     def set_width(self, width: float) -> None:
@@ -1007,7 +1011,7 @@ def build_settings_view(autopilot_status: ft.Text, page: Optional[ft.Page] = Non
                             ],
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         ),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                        padding=ft.Padding.symmetric(horizontal=8, vertical=4),
                         bgcolor=CARD,
                         border_radius=6,
                         border=ft.Border.all(1, BORDER),
@@ -1834,7 +1838,7 @@ def run_app(page: ft.Page) -> None:
         ui.susp_table.rows = rows
         ui.undo_btn.disabled = len(rows) == 0
 
-    def apply_result(res: PipelineResult) -> None:
+    def apply_result(res: PipelineResult, redraw_charts: bool = True) -> None:
         nonlocal ap_last_fire
         f = res.features
         cpu = f.get("cpu_percent_raw", f.get("cpu_percent", 0))
@@ -1846,10 +1850,10 @@ def run_app(page: ft.Page) -> None:
         ui.metrics[1].update(mem)
         ui.metrics[2].update(tmp if tmp > 0 else 0)
         ui.metrics[3].update(swap)
-        ui.charts[0].push(cpu)
-        ui.charts[1].push(mem)
+        ui.charts[0].push(cpu, redraw=redraw_charts)
+        ui.charts[1].push(mem, redraw=redraw_charts)
         if tmp > 0:
-            ui.charts[2].push(tmp)
+            ui.charts[2].push(tmp, redraw=redraw_charts)
 
         _update_analytics(ui, res)
 
@@ -1928,11 +1932,18 @@ def run_app(page: ft.Page) -> None:
                 snack("🎯 Calibration Complete! Local system metrics calibrated successfully.", ACCENT)
                 log("Calibration complete: Saved machine-specific metrics profile", ACCENT)
 
-        for item in items:
-            if isinstance(item, tuple) and item[0] == "proc_table":
-                ui.proc_table.rows = proc_rows(item[1])
-            else:
-                apply_result(item)
+        # Separate telemetry items and process table updates
+        telemetry_items = [item for item in items if not (isinstance(item, tuple) and item[0] == "proc_table")]
+        proc_table_items = [item for item in items if isinstance(item, tuple) and item[0] == "proc_table"]
+
+        if proc_table_items:
+            # Only render the last proc_table update to avoid redundant DataTable builds
+            ui.proc_table.rows = proc_rows(proc_table_items[-1][1])
+
+        # Process telemetry items
+        for idx, item in enumerate(telemetry_items):
+            is_last = (idx == len(telemetry_items) - 1)
+            apply_result(item, redraw_charts=is_last)
 
         ui.sync_charts()
         page.update()
@@ -1973,15 +1984,20 @@ def run_app(page: ft.Page) -> None:
     def poll_processes() -> None:
         """
         FIXED VERSION: Never blocks the UI thread.
-        Gets cached process data from background scanner.
+        Gets cached process data from background scanner, updating only on changes.
         """
+        last_ui_update = 0.0
         while pipeline:
             try:
                 # Get cached data (VERY FAST - no blocking!)
                 with _process_cache["lock"]:
-                    if _process_cache["data"]:
-                        # Send cached data to UI
-                        result_q.put(("proc_table", _process_cache["data"]))
+                    cache_time = _process_cache["last_update"]
+                    cache_data = _process_cache["data"]
+                
+                if cache_time > last_ui_update and cache_data:
+                    # Send cached data to UI
+                    result_q.put(("proc_table", cache_data))
+                    last_ui_update = cache_time
             except Exception as e:
                 print(f"Error in poll_processes: {e}", flush=True)
             
