@@ -149,11 +149,17 @@ The model was trained in PyTorch with **Early Stopping** (patience = 10) to sele
 | 🚀 **One-Click Boost** | Manually triggers an immediate optimization event: resumes all suspended processes, runs Python garbage collection, and clears memory. |
 | ↩ **Undo Button** | Immediately restores all processes that were suspended during the current session. Disabled when no processes are suspended. |
 
-### The Action Engine: Safe Process Suspension
-When confidence crosses the 80% threshold in Auto-Pilot mode, the optimizer:
-1. Iterates through active processes and screens them against a strict, hard-coded **System Whitelist** (protecting core operating system kernel services, security binaries, desktop window managers, and the optimizer itself).
-2. Suspends the top 3 non-whitelisted CPU consumers using `psutil.Process(pid).suspend()`.
-3. Auto-resumes any suspended processes after a **5-minute safety watchdog timeout** to guarantee no user process remains suspended indefinitely, even if the application is closed.
+### The Action Engine: Cross-Platform Resource Mitigation Strategy
+Rather than abruptly suspending background tasks (which can lock OS resources and trigger system-wide freezes), the optimizer implements a cross-platform, deterministic mitigation strategy that utilizes dynamic process scheduling and memory allocation:
+
+* **Windows Architecture (Hardware & Affinity Mapping):**
+  1. *CPU Affinity Isolation:* Offending heavy tasks are stripped of access to Core 0 and Core 1, isolating them to remaining cores so the GUI and interrupt routines remain fully responsive.
+  2. *Priority Throttling:* Scheduling priority is downgraded to the lowest idle state (`IDLE_PRIORITY_CLASS`), forcing the scheduler to automatically yield CPU time to foreground windows.
+  3. *Pre-emptive Memory Trimming:* Working sets are aggressively flushed to disk (`EmptyWorkingSet`) before memory collisions occur, avoiding violent hard page faults.
+* **macOS Architecture (Intent-Based Quality of Service):**
+  1. *QoS Downgrade:* Downgrades POSIX priority to the lowest background state (`nice 19`).
+  2. *Core Migration:* The Darwin scheduler automatically migrates the heavy task away from performance P-Cores onto efficiency E-Cores to protect user experience.
+* **Reversal Protocol:** Once the GRU forecasts that the bottleneck has passed, the original affinities and priorities are restored. A 5-minute safety watchdog remains active to automatically roll back any mitigations if the dashboard is closed.
 
 ---
 
@@ -165,11 +171,11 @@ All application components are organized within a structured workspace layout:
 Final_year/
 ├── src/
 │   ├── main.py            # Modern Flet-based dashboard (primary entry point)
-│   ├── main_backup.py     # PyQt6-based fallback dashboard
+│   ├── main_pyqt.py       # PyQt6-based fallback dashboard
 │   ├── config.py          # Central settings, constants, and Whitelists
 │   ├── core/
 │   │   ├── pipeline.py       # Live 1Hz telemetry polling & inference coordination
-│   │   ├── action_engine.py  # Thread-safe process suspend/resume watchdog
+│   │   ├── action_engine.py  # Thread-safe process scheduling & memory mitigation watchdog
 │   │   ├── collector.py      # Independent producer-consumer telemetry logger
 │   │   └── notifier.py       # Asynchronous cross-platform OS notifications
 │   ├── data/
@@ -186,11 +192,14 @@ Final_year/
 │       ├── preprocess.py     # Training set sequence building & labeling logic
 │       └── train.py          # PyTorch optimizer training loop with Early Stopping
 ├── docs/
-│   ├── dataset_collection.docx # Document A: System feature selection & collection telemetry
-│   ├── model_documentation.docx # Document B: GRU gate equations & model training metrics
-│   ├── data_pipeline.docx      # Document C: Live data scaling, ONNX session, & action watchdog
+│   ├── introductions.docx      # Module E: Project Introduction & Final System Capabilities
+│   ├── dataset_collection.docx # Module A: System feature selection & collection telemetry
+│   ├── model_documentation.docx # Module B: GRU gate equations & model training metrics
+│   ├── data_pipeline.docx      # Module C: Live data scaling, ONNX session, & action watchdog
 │   ├── ui_documentation.docx   # Document D: Flet layout, canvas charts, and thread-safe queues
-│   └── project_documentation.docx # Complete academic project compendium and reference
+│   ├── mitigation_strategy.docx # Sub-Module Upgrade: Cross-Platform Resource Mitigation Strategy
+│   ├── project_documentation.docx # Complete academic project compendium and reference
+│   └── System_Resource_Optimizer_Documentation.docx # Unified master academic documentation compendium (All modules combined)
 ├── requirements.txt       # Core Python library dependencies
 ├── Run_Windows.bat        # Double-click script to run modern Flet on Windows
 ├── Run_macOS.command      # Double-click script to run modern Flet on macOS

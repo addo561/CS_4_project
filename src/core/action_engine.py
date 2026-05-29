@@ -24,12 +24,14 @@ log = logging.getLogger("action_engine")
 
 @dataclass
 class SuspendedProcess:
-    """Record of a process that was suspended by the action engine."""
-    pid:          int
-    name:         str
-    suspended_at: float          # monotonic timestamp
-    reason:       str
-    auto_resume:  bool = True    # resume after UNDO_TIMEOUT_SEC if not manually undone
+    """Record of a process that was mitigated by the action engine."""
+    pid:               int
+    name:              str
+    suspended_at:      float          # monotonic timestamp
+    reason:            str
+    auto_resume:       bool = True    # resume after UNDO_TIMEOUT_SEC if not manually undone
+    original_affinity: list = field(default_factory=list)
+    original_nice:     Optional[int] = None
 
 
 @dataclass
@@ -282,7 +284,7 @@ class ActionEngine:
                                     "network service", "_windowserver", "_spotlight"):
                 return False
 
-            # Skip already-suspended processes
+            # Skip already-suspended/mitigated processes
             with self._lock:
                 if proc.pid in self._suspended:
                     return False
@@ -299,7 +301,7 @@ class ActionEngine:
 
     def _select_targets(self, max_targets: int = 3) -> list:
         """
-        Identify up to max_targets suspendable processes.
+        Identify up to max_targets suspendable/mitigatable processes.
         Sorted by MEMORY (RSS) descending — mirrors proposal sort order.
         Avoids suspending zero-CPU idle processes that won't help.
         """
@@ -324,72 +326,140 @@ class ActionEngine:
         return [proc for _, proc in candidates[:max_targets]]
 
     def _suspend_process(self, proc: psutil.Process, reason: str) -> bool:
-        """Suspend a process with platform-specific safety checks."""
+        """Throttles a process with advanced platform-specific mitigation strategies instead of violent suspension."""
         try:
             name = proc.name()
             pid = proc.pid
             
             # Whitelist and safety checks
             if not self._is_safe_to_suspend(proc):
-                log.warning(f"Refusing to suspend unsafe process: {name} (PID {pid})")
+                log.warning(f"Refusing to throttle unsafe process: {name} (PID {pid})")
                 return False
             
             import platform
             PLATFORM = platform.system()
             
-            # Platform-specific checks
-            if PLATFORM == "Darwin":  # macOS
-                # Extra caution on macOS - SIGSTOP is kernel-level
-                log.warning(f"⚠️  macOS: Suspending {name} (PID {pid}) - high risk!")
-                log.warning("   This sends SIGSTOP at kernel level")
+            # Read original state before applying mitigations
+            original_nice = None
+            original_affinity = None
+            try:
+                original_nice = proc.nice()
+            except Exception as e:
+                log.warning(f"Could not read nice value for PID {pid}: {e}")
                 
-                # Don't suspend system services or parent processes
-                if proc.parent() and proc.parent().pid == 1:
-                    log.error(f"Refusing to suspend system service parent: {name}")
-                    return False
+            try:
+                if hasattr(proc, 'cpu_affinity'):
+                    original_affinity = proc.cpu_affinity()
+            except Exception as e:
+                log.warning(f"Could not read cpu affinity for PID {pid}: {e}")
+
+            # Apply mitigation strategy based on OS
+            log.info("Applying advanced mitigation strategy to process %d (%s) - Reason: %s", pid, name, reason)
             
-            elif PLATFORM == "Windows":
-                # Windows: Check if process is doing I/O
-                if proc.status() == psutil.STATUS_RUNNING:
-                    try:
-                        io_counters = proc.io_counters()
-                        if io_counters and (io_counters.read_bytes > 0 or io_counters.write_bytes > 0):
-                            # It's doing I/O, let's be careful or skip
-                            log.warning(f"Process {name} is doing I/O - risky to suspend")
-                    except (psutil.AccessDenied, AttributeError):
-                        pass
+            if PLATFORM == "Windows":
+                # 1. Priority Throttling (Downgrade to lowest idle state)
+                try:
+                    proc.nice(psutil.IDLE_PRIORITY_CLASS)
+                    log.info("Priority downgraded to IDLE_PRIORITY_CLASS for PID %d", pid)
+                except Exception as e:
+                    log.warning(f"Failed to downgrade priority for PID {pid}: {e}")
+                
+                # 2. CPU Affinity Isolation (Strip Core 0 and Core 1)
+                try:
+                    num_cpus = psutil.cpu_count()
+                    if num_cpus > 2:
+                        target_affinity = list(range(2, num_cpus))
+                        proc.cpu_affinity(target_affinity)
+                        log.info(f"Isolated CPU affinity to cores {target_affinity} for PID {pid}")
+                    else:
+                        log.info(f"Skipping core isolation for PID {pid} (insufficient core count: {num_cpus})")
+                except Exception as e:
+                    log.warning(f"Failed to set CPU affinity for PID {pid}: {e}")
+                
+                # 3. Pre-emptive Memory Trimming (EmptyWorkingSet via ctypes)
+                try:
+                    import ctypes
+                    PROCESS_QUERY_INFORMATION = 0x0400
+                    PROCESS_SET_QUOTA = 0x0100
+                    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA, False, pid)
+                    if handle:
+                        ctypes.windll.psapi.EmptyWorkingSet(handle)
+                        ctypes.windll.kernel32.CloseHandle(handle)
+                        log.info("Working set successfully trimmed for PID %d", pid)
+                except Exception as e:
+                    log.warning(f"Failed to trim memory for PID {pid}: {e}")
+                    
+            elif PLATFORM == "Darwin":  # macOS
+                # 1. Quality of Service (QoS) / Priority Downgrade (Set nice to 19)
+                # POSIX nice value 19 represents the lowest background QoS state.
+                # The Darwin scheduler will automatically migrate the task off P-Cores to E-Cores.
+                try:
+                    proc.nice(19)
+                    log.info("POSIX priority downgraded to 19 (Lowest background QoS / E-core migration) for PID %d", pid)
+                except Exception as e:
+                    log.warning(f"Failed to set POSIX priority to 19 for PID {pid}: {e}")
+            else:
+                # Generic POSIX Fallback
+                try:
+                    proc.nice(19)
+                    log.info("POSIX priority downgraded to 19 for PID %d", pid)
+                except Exception as e:
+                    log.warning(f"Failed to downgrade priority for PID {pid}: {e}")
 
             mem  = proc.memory_info().rss / (1024 * 1024)
             mem_str = f"{mem/1024:.1f}GB" if mem > 1024 else f"{mem:.1f}MB"
             
-            # Actually suspend
-            log.info("Actually suspending process %d (%s) - Reason: %s", pid, name, reason)
-            proc.suspend()
-            
             with self._lock:
                 self._suspended[pid] = SuspendedProcess(
-                    pid          = pid,
-                    name         = f"{name} ({mem_str})",
-                    suspended_at = time.monotonic(),
-                    reason       = reason,
+                    pid               = pid,
+                    name              = f"{name} ({mem_str})",
+                    suspended_at      = time.monotonic(),
+                    reason            = reason,
+                    original_affinity = original_affinity or [],
+                    original_nice     = original_nice,
                 )
-            log.info("Successfully suspended PID %d (%s) using %s", pid, name, mem_str)
+            log.info("Successfully mitigated PID %d (%s) using %s", pid, name, mem_str)
             return True
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-            log.warning("Could not suspend PID %d: %s", proc.pid, exc)
+            log.warning("Could not apply mitigation to PID %d: %s", proc.pid, exc)
             return False
 
     def _resume_process(self, pid: int) -> bool:
-        """Resume a suspended process."""
+        """Reverses the applied mitigations and restores the original process priorities and affinities."""
         try:
+            record = self._suspended.get(pid)
+            if not record:
+                log.warning(f"No mitigation record found for PID {pid}")
+                return False
+                
             proc = psutil.Process(pid)
-            log.info(f"Resuming process: {proc.name()} (PID {pid})")
-            proc.resume()
+            name = proc.name()
+            log.info(f"Reversing mitigations for process: {name} (PID {pid})")
+            
+            import platform
+            PLATFORM = platform.system()
+            
+            # Restore Priority / Nice
+            if record.original_nice is not None:
+                try:
+                    proc.nice(record.original_nice)
+                    log.info(f"Restored original priority {record.original_nice} for PID {pid}")
+                except Exception as e:
+                    log.warning(f"Failed to restore original priority for PID {pid}: {e}")
+                    
+            # Restore CPU Affinity (Windows)
+            if PLATFORM == "Windows" and record.original_affinity:
+                try:
+                    proc.cpu_affinity(record.original_affinity)
+                    log.info(f"Restored original CPU affinity {record.original_affinity} for PID {pid}")
+                except Exception as e:
+                    log.warning(f"Failed to restore original CPU affinity for PID {pid}: {e}")
+
             self._suspended.pop(pid, None)
-            log.info("Resumed PID %d", pid)
+            log.info("Successfully reversed all mitigations for PID %d", pid)
             return True
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-            log.warning("Could not resume PID %d: %s", pid, exc)
+            log.warning("Could not reverse mitigations for PID %d: %s", pid, exc)
             self._suspended.pop(pid, None)
             return False
 

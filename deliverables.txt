@@ -64,12 +64,12 @@ The built project repository delivers a structured workspace containing the foll
 │
 ├── src/
 │   ├── main.py            <- Primary modern Flet dashboard application
-│   ├── main_backup.py     <- Fallback PyQt6 dashboard application (untouched PyQt6 historical reference)
+│   ├── main_pyqt.py       <- Fallback PyQt6 dashboard application (untouched PyQt6 historical reference)
 │   ├── config.py          <- Central configurations, whitelists, and model parameters
 │   │
 │   ├── core/
 │   │   ├── pipeline.py       <- Background 1Hz telemetry and GRU inference engine
-│   │   ├── action_engine.py  <- Safe process suspension, whitelist, and watchdog timers
+│   │   ├── action_engine.py  <- Dynamic OS priority, CPU affinity, and memory trimming watchdog
 │   │   ├── collector.py      <- Offline producer-consumer telemetry logger for training data
 │   │   └── notifier.py       <- Dynamic asynchronous OS desktop alerts engine
 │   │
@@ -83,10 +83,14 @@ The built project repository delivers a structured workspace containing the foll
 │       └── train.py          <- PyTorch optimizer training loop with Early Stopping
 │
 └── docs/
+    ├── introductions.docx      <- Module E: Project Introduction & Final System Capabilities
     ├── dataset_collection.docx  <- Document A: Telemetry parameters and collection setup
     ├── model_documentation.docx <- Document B: GRU gate equations and loss-metric reports
     ├── data_pipeline.docx       <- Document C: Pipeline scaling, ONNX inference, and Action Engine
-    └── ui_documentation.docx    <- Document D: Flet design system, thread-safe queues, and canvas charts
+    ├── ui_documentation.docx    <- Document D: Flet design system, thread-safe queues, and canvas charts
+    ├── mitigation_strategy.docx <- Sub-Module Upgrade: Cross-Platform Resource Mitigation Strategy
+    ├── project_documentation.docx <- Complete academic project compendium and reference
+    └── System_Resource_Optimizer_Documentation.docx <- Unified master academic documentation compendium (All modules combined)
 
 -----------------------------------------------------------------------------
 3. SYSTEM GUARANTEES & ACADEMIC OUTCOMES
