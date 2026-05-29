@@ -1712,6 +1712,14 @@ def run_app(page: ft.Page) -> None:
     page.window.min_width = 1100
     page.window.min_height = 720
 
+    # Set the taskbar/window icon dynamically based on platform
+    import os
+    import platform
+    icon_ext = "icns" if platform.system() == "Darwin" else "png"
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", f"icon.{icon_ext}")
+    if os.path.exists(icon_path):
+        page.window.icon = icon_path
+
     ui_callbacks = {}
     ui, dashboard_view, analytics_view, settings_view, right_rail = build_dashboard_content(page, ui_callbacks)
 
