@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 ROOT = os.path.dirname(os.path.abspath(SPEC))   # Final_year/
 
 # Read version dynamically from version.txt if it exists
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 version_file = os.path.join(ROOT, "src", "assets", "version.txt")
 if os.path.isfile(version_file):
     try:
@@ -35,8 +35,6 @@ added_files = [
 ]
 added_files += collect_data_files("flet")
 added_files += collect_data_files("flet-desktop")
-added_files += collect_data_files("PyQt6")
-added_files += collect_data_files("pyqtgraph")
 
 # ── Hidden imports PyInstaller misses ─────────────────────────────────────────
 hidden = [
@@ -82,18 +80,40 @@ a = Analysis(
         "notebook",
         "jupyter",
         "pytest",
-        # Exclude heavy unused PyQt6 web and mobile frameworks
+        # Exclude heavy unused PyQt6 web, mobile, 3D, and multimedia frameworks
         "PyQt6.QtWebEngine",
         "PyQt6.QtWebEngineCore",
         "PyQt6.QtWebEngineWidgets",
         "PyQt6.QtQml",
         "PyQt6.QtQuick",
         "PyQt6.QtQuickWidgets",
+        "PyQt6.QtQuick3D",
+        "PyQt6.QtQuick3DEffects",
+        "PyQt6.QtQuick3DHelpers",
+        "PyQt6.QtQuick3DRuntimeRender",
+        "PyQt6.Qt3D",
+        "PyQt6.Qt3DAnimation",
+        "PyQt6.Qt3DCore",
+        "PyQt6.Qt3DExtras",
+        "PyQt6.Qt3DInput",
+        "PyQt6.Qt3DLogic",
+        "PyQt6.Qt3DRender",
+        "PyQt6.QtPdf",
+        "PyQt6.QtPdfWidgets",
+        "PyQt6.QtDesigner",
+        "PyQt6.QtMultimedia",
+        "PyQt6.QtMultimediaWidgets",
+        "PyQt6.QtBluetooth",
+        "PyQt6.QtSensors",
+        "PyQt6.QtPositioning",
+        "PyQt6.QtNfc",
+        "PyQt6.QtSerialPort",
+        "PyQt6.QtRemoteObjects",
+        "PyQt6.QtSpatialAudio",
+        "PyQt6.QtCharts",
         "PyQt6.QtNetwork",
         "PyQt6.QtSql",
         "PyQt6.QtTest",
-        "PyQt6.QtBluetooth",
-        "PyQt6.QtMultimedia",
     ],
     noarchive=False,
     optimize=1,

@@ -218,9 +218,11 @@ class ActionEngine:
 
     @classmethod
     def _is_system_process(cls, proc: psutil.Process) -> bool:
-        """Enhanced system process detection."""
+        """Enhanced system process detection using pre-fetched attributes when available."""
         try:
-            name = proc.name().lower()
+            # Check pre-fetched name first (fast path)
+            name = (proc.info.get("name") if hasattr(proc, "info") and proc.info else None) or proc.name()
+            name = name.lower()
             
             # Check against static whitelist
             if name in cls._WHITELIST:
@@ -231,22 +233,21 @@ class ActionEngine:
                 return True
             
             # Check UID/GID on Unix systems (like macOS)
-            if hasattr(proc, 'uids'):
-                uids = proc.uids()
-                if uids.real == 0:  # Root/SYSTEM
-                    return True
+            uids = (proc.info.get("uids") if hasattr(proc, "info") and proc.info else None) or (proc.uids() if hasattr(proc, "uids") else None)
+            if uids and hasattr(uids, "real") and uids.real == 0:  # Root/SYSTEM
+                return True
             
-            # Check if parent is system init
+            # Check if parent is system init using pre-fetched ppid (100x faster, no process instantiation)
             try:
-                parent = proc.parent()
-                if parent and parent.pid == 1:  # Parent is init
+                ppid = (proc.info.get("ppid") if hasattr(proc, "info") and proc.info else None) or proc.ppid()
+                if ppid == 1:
                     return True
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
             
-            # Additional safety: don't suspend if memory usage is extremely low (less than 0.1%)
+            # Additional safety: don't suspend if memory usage is extremely low
             try:
-                mem_percent = proc.memory_percent()
+                mem_percent = (proc.info.get("memory_percent") if hasattr(proc, "info") and proc.info else None) or proc.memory_percent()
                 if mem_percent < 0.1:  # Less than 0.1% - likely system/idle
                     return True
             except psutil.AccessDenied:
@@ -257,26 +258,30 @@ class ActionEngine:
             log.warning(f"Error checking if process is system: {e}")
             return True  # Safer to assume system process
 
-    def _is_safe_to_suspend(self, proc: psutil.Process) -> bool:
+    def _is_safe_to_suspend(self, proc: psutil.Process, user_whitelist_lower: set[str] = None) -> bool:
         """
         Checks whitelist AND skips root/SYSTEM account processes.
         """
         try:
-            name = proc.name().lower()
+            name = (proc.info.get("name") if hasattr(proc, "info") and proc.info else None) or proc.name()
+            name = name.lower()
             
-            # Check user defined whitelist
-            from config import load_user_whitelist
-            user_whitelist = load_user_whitelist()
-            if name in {w.lower() for w in user_whitelist}:
+            # Check user defined whitelist (cached or loaded on-the-fly)
+            if user_whitelist_lower is None:
+                from config import load_user_whitelist
+                user_whitelist = load_user_whitelist()
+                user_whitelist_lower = {w.lower() for w in user_whitelist}
+                
+            if name in user_whitelist_lower:
                 return False
 
             if self._is_system_process(proc):
                 return False
 
-            # Skip system account processes (same check as proposal)
+            # Skip system account processes (pre-fetched or fallback)
             username = ""
             try:
-                username = proc.username() or ""
+                username = (proc.info.get("username") if hasattr(proc, "info") and proc.info else None) or proc.username() or ""
             except (psutil.AccessDenied, psutil.NoSuchProcess):
                 return False
 
@@ -290,7 +295,7 @@ class ActionEngine:
                     return False
 
             # Skip zombie / dead processes
-            status = proc.status()
+            status = (proc.info.get("status") if hasattr(proc, "info") and proc.info else None) or proc.status()
             if status in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
                 return False
 
@@ -303,14 +308,19 @@ class ActionEngine:
         """
         Identify up to max_targets suspendable/mitigatable processes.
         Sorted by MEMORY (RSS) descending — mirrors proposal sort order.
-        Avoids suspending zero-CPU idle processes that won't help.
+        Reads all required fields efficiently via process_iter pre-fetching.
         """
         candidates = []
         try:
-            for proc in psutil.process_iter(["pid", "name", "memory_info",
-                                             "cpu_percent", "username", "status"]):
+            from config import load_user_whitelist
+            user_whitelist = load_user_whitelist()
+            user_whitelist_lower = {w.lower() for w in user_whitelist}
+            
+            # Pre-fetch all fields used during safety filters and selection to prevent N+1 queries
+            for proc in psutil.process_iter(["pid", "name", "memory_info", "cpu_percent", 
+                                             "username", "status", "memory_percent", "uids", "ppid"]):
                 try:
-                    if not self._is_safe_to_suspend(proc):
+                    if not self._is_safe_to_suspend(proc, user_whitelist_lower):
                         continue
                     mem = proc.info.get("memory_info")
                     rss = mem.rss if mem else 0
