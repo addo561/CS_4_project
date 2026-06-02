@@ -11,6 +11,8 @@ import time
 import socket
 import json
 import threading
+import asyncio
+from queue import Queue, Empty
 from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -241,6 +243,10 @@ class RollingChart:
         fill.extend([cv.Path.LineTo(pts[-1][0], h), cv.Path.Close()])
         self._line.elements = line
         self._fill.elements = fill
+        try:
+            self.canvas.update()
+        except Exception:
+            pass
 
 
 # ── Metric tile ───────────────────────────────────────────────────────────────
@@ -1726,7 +1732,7 @@ def run_app(page: ft.Page) -> None:
             print(f"Error launching background service: {e}", flush=True)
 
     # Background polling and state synchronization thread
-    def poll_service_worker():
+    async def poll_service_worker():
         first_connect = True
         service_start_attempted = False
         while True:
@@ -1742,7 +1748,7 @@ def run_app(page: ft.Page) -> None:
                 if not service_start_attempted:
                     launch_background_service()
                     service_start_attempted = True
-                    time.sleep(1.0)
+                    await asyncio.sleep(1.0)
                 try:
                     page.update()
                 except Exception:
@@ -1800,7 +1806,7 @@ def run_app(page: ft.Page) -> None:
                         except Exception:
                             pass
                 else:
-                    time.sleep(2)
+                    await asyncio.sleep(2.0)
                     continue
 
             # Connected - poll updates
@@ -1899,9 +1905,9 @@ def run_app(page: ft.Page) -> None:
                 page.update()
             except Exception:
                 pass
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
-    threading.Thread(target=poll_service_worker, daemon=True, name="DashboardServicePoll").start()
+    page.run_task(poll_service_worker)
     ui.sync_charts()
     page.update()
 

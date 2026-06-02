@@ -55,7 +55,7 @@ jobs:
             TAG="${{ github.ref_name }}"
             echo "$TAG" > src/assets/version.txt
           else
-            echo "v2.7.0" > src/assets/version.txt
+            echo "v2.8.0" > src/assets/version.txt
           fi
           echo "Built with version: $(cat src/assets/version.txt)"
 
@@ -111,7 +111,7 @@ jobs:
             $tag = "${{ github.ref_name }}"
             Set-Content -Path src/assets/version.txt -Value $tag
           } else {
-            Set-Content -Path src/assets/version.txt -Value "v2.7.0"
+            Set-Content -Path src/assets/version.txt -Value "v2.8.0"
           }
           Write-Host "Built with version: $(Get-Content src/assets/version.txt)"
 

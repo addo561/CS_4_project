@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import threading
+import asyncio
 from collections import deque
 from dataclasses import dataclass
 from queue import Queue, Empty
@@ -73,17 +74,6 @@ def _background_process_scanner():
         
         time.sleep(3)  # Scan every 3 seconds (on background thread!)
 
-def _is_flet_broken() -> bool:
-    """Check if Flet environment is broken or PyQt6 is forced."""
-    if os.environ.get("SRO_USE_PYQT", "").lower() in ("true", "1"):
-        print("ℹ️  SRO_USE_PYQT env var detected. Forcing PyQt6 dashboard fallback.", flush=True)
-        return True
-    try:
-        import flet as ft
-        return False
-    except Exception as e:
-        print(f"⚠️ Flet check failed: {e}. Falling back to PyQt6.", flush=True)
-        return True
 
 # ── Design tokens (design.md) ─────────────────────────────────────────────────
 BG = "#0D1117"
@@ -232,6 +222,10 @@ class RollingChart:
         fill.extend([cv.Path.LineTo(pts[-1][0], h), cv.Path.Close()])
         self._line.elements = line
         self._fill.elements = fill
+        try:
+            self.canvas.update()
+        except Exception:
+            pass
 
 
 # ── Metric tile ───────────────────────────────────────────────────────────────
@@ -834,13 +828,7 @@ def build_science_hub_view() -> ft.Column:
 
     # Compile the right-side benchmarking section
     report_md_content = "Loading empirical benchmark metrics..."
-    report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "benchmark_report.md")
-    if not os.path.isfile(report_path):
-        report_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "benchmark_report.md")
-    if not os.path.isfile(report_path):
-        report_path = os.path.join("/Users/user/Desktop/Final_year/src/docs/benchmark_report.md")
-    if not os.path.isfile(report_path):
-        report_path = os.path.join("/Users/user/Desktop/Final_year/docs/benchmark_report.md")
+    report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "benchmark_report.md")
 
     if os.path.isfile(report_path):
         try:
@@ -1734,8 +1722,23 @@ def run_app(page: ft.Page) -> None:
         "science_hub": science_hub_view,
         "settings": settings_view,
     }
+
+    # Configure all views to expand and fill the stack container
+    for k, view in views.items():
+        view.expand = True
+        view.top = 0
+        view.left = 0
+        view.right = 0
+        view.bottom = 0
+        view.visible = (k == "dashboard")
+
+    views_stack = ft.Stack(
+        controls=[dashboard_view, analytics_view, science_hub_view, settings_view],
+        expand=True,
+    )
+
     content_host = ft.Container(
-        content=dashboard_view,
+        content=views_stack,
         expand=True,
         padding=ft.Padding.only(left=24, top=16, right=16, bottom=16),
     )
@@ -1762,11 +1765,27 @@ def run_app(page: ft.Page) -> None:
         if key not in views:
             return
         set_active_nav(key)
-        if key == "science_hub":
-            views["science_hub"] = build_science_hub_view()
-        elif key == "settings":
+        if key == "settings":
+            # Rebuild the settings view to ensure we load the latest configurations/whitelist from disk
             views["settings"] = build_settings_view(ui.autopilot_status, page)
-        content_host.content = views[key]
+            views["settings"].expand = True
+            views["settings"].top = 0
+            views["settings"].left = 0
+            views["settings"].right = 0
+            views["settings"].bottom = 0
+            
+            # Update the stack's controls array
+            views_stack.controls = [
+                views["dashboard"],
+                views["analytics"],
+                views["science_hub"],
+                views["settings"]
+            ]
+
+        # Toggle visibility of all views in the stack instantly
+        for k, view in views.items():
+            view.visible = (k == key)
+
         right_rail_host.visible = key == "dashboard"
         if key == "dashboard":
             ui.sync_charts()
@@ -1905,7 +1924,7 @@ def run_app(page: ft.Page) -> None:
             snack(res.action.message, WARN)
             refresh_suspended()
 
-    async def flush_ui() -> None:
+    def flush_ui() -> None:
         with pending_lock:
             calibs = pending_calib[:]
             pending_calib.clear()
@@ -1955,9 +1974,9 @@ def run_app(page: ft.Page) -> None:
         if flush_scheduled:
             return
         flush_scheduled = True
-        page.run_task(flush_ui)
+        flush_ui()
 
-    def poll_queues() -> None:
+    async def poll_queues() -> None:
         while True:
             try:
                 dirty = False
@@ -1979,7 +1998,7 @@ def run_app(page: ft.Page) -> None:
                     schedule_flush()
             except Exception as exc:
                 print(f"Error polling queues: {exc}", flush=True)
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
 
     def poll_processes() -> None:
         """
@@ -2054,8 +2073,8 @@ def run_app(page: ft.Page) -> None:
         on_calibration_progress=lambda el, tot: calib_q.put((el, tot)),
     )
     pipeline.start()
-    threading.Thread(target=poll_processes, daemon=True).start()
-    threading.Thread(target=poll_queues, daemon=True).start()
+    page.run_thread(poll_processes)
+    page.run_task(poll_queues)
 
     ui.sync_charts()
     page.update()
@@ -2074,21 +2093,8 @@ def main(page: ft.Page) -> None:
 
 
 if __name__ == "__main__":
-    if _is_flet_broken():
-        try:
-            from main_pyqt import run_pyqt_ui
-            run_pyqt_ui()
-        except Exception as e:
-            print(f"❌ Failed to fall back to PyQt6: {e}", flush=True)
-            sys.exit(1)
-    else:
-        try:
-            ft.run(main)
-        except Exception as e:
-            print(f"⚠️ Flet runtime error: {e}. Falling back to PyQt6...", flush=True)
-            try:
-                from main_pyqt import run_pyqt_ui
-                run_pyqt_ui()
-            except Exception as e2:
-                print(f"❌ Failed to fall back to PyQt6: {e2}", flush=True)
-                sys.exit(1)
+    try:
+        ft.run(main)
+    except Exception as e:
+        print(f"❌ Flet runtime error: {e}", flush=True)
+        sys.exit(1)

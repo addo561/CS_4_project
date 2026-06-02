@@ -353,8 +353,8 @@ def main():
         metrics["GRU Baseline (FP32)"] = metrics["GRU Baseline (FP32)"][:-1] + (0.68,)
 
     # 6. Generate Report
-    os.makedirs(os.path.join(os.path.dirname(MODEL_DIR), "docs"), exist_ok=True)
-    report_path = os.path.join(os.path.dirname(MODEL_DIR), "docs", "benchmark_report.md")
+    os.makedirs(os.path.join(os.path.dirname(MODEL_DIR), "assets"), exist_ok=True)
+    report_path = os.path.join(os.path.dirname(MODEL_DIR), "assets", "benchmark_report.md")
 
     md_content = """# 📊 Empirical Performance Comparison & Model Benchmarks
 KNUST Final Year Project — Group 4

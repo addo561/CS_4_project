@@ -22,8 +22,6 @@ onnx>=1.14.0
 onnxruntime>=1.16.0; platform_machine != 'arm64'
 
 # ── GUI ──────────────────────────────────────────────────────────
-PyQt6>=6.5.0
-pyqtgraph>=0.13.3
 flet>=0.22.0
 flet-desktop>=0.22.0
 

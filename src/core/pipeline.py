@@ -5,7 +5,7 @@
 #
 # This module is the central nervous system of the application.
 # It runs entirely on a background thread and communicates results
-# to the PyQt6 UI via a thread-safe callback.
+# to the Flet UI via a thread-safe callback.
 # =============================================================================
 
 import collections
@@ -321,6 +321,7 @@ class Pipeline:
         self._stop_event   = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_action_time = 0.0
+        self._last_warning_time = 0.0
         self._feature_cols: Optional[list] = None
 
         # ── Calibration state ───────────────────────────────────────────────
@@ -344,6 +345,10 @@ class Pipeline:
         self._ema_cpu: float = 0.0
         self._ema_mem: float = 0.0
         self._ema_init = False   # set False so first value initialises without smoothing
+
+        # ── Sudden Spike Tracking ───────────────────────────────────────────
+        self._prev_raw_cpu: Optional[float] = None
+        self._prev_raw_mem: Optional[float] = None
 
         # ── I/O baselines (for net/disk speed calculation) ───────────────────
         try:
@@ -402,6 +407,24 @@ class Pipeline:
         # Warm up cpu_percent (first call always returns 0.0)
         psutil.cpu_percent(interval=None)
         psutil.cpu_percent(interval=None, percpu=True)
+
+        # Lower process OS priority to Below Normal / nice=10 to prevent system lag when opening heavy apps
+        try:
+            proc = psutil.Process()
+            if sys.platform == "win32":
+                if proc.nice() != psutil.BELOW_NORMAL_PRIORITY_CLASS:
+                    proc.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+                    log.info("SRO background process OS priority successfully lowered to BELOW_NORMAL.")
+            else:
+                # Only lower priority if current nice is higher priority (less than 10)
+                if proc.nice() < 10:
+                    proc.nice(10)
+                    log.info("SRO background process OS priority successfully lowered to nice=10.")
+                else:
+                    log.info(f"SRO process OS priority is already nice={proc.nice()} (which is low priority).")
+        except Exception as e:
+            log.warning(f"Could not lower process OS priority: {e}")
+
         time.sleep(POLL_INTERVAL_SEC)
 
         monitor = ResourceMonitor()
@@ -459,7 +482,47 @@ class Pipeline:
                 action = ActionResult()
                 attributions = None
 
-                if len(self._window) == WINDOW_SIZE:
+                # Detect sudden heavy application launch (massive system load spike)
+                raw_cpu = raw.get("cpu_percent_raw", 0.0)
+                raw_mem = raw.get("mem_percent_raw", 0.0)
+                sudden_spike = False
+
+                if self._prev_raw_cpu is not None:
+                    cpu_delta = raw_cpu - self._prev_raw_cpu
+                    mem_delta = raw_mem - (self._prev_raw_mem if self._prev_raw_mem is not None else raw_mem)
+                    
+                    # Spike bypass conditions:
+                    # 1. Sudden CPU spike (> 40% rise in 1s)
+                    # 2. Extreme CPU load (> 92% raw CPU) with rising trend (> 5% rise)
+                    # 3. Sudden memory pressure surge (> 15% rise in 1s)
+                    if cpu_delta > 40.0 or (raw_cpu > 92.0 and cpu_delta > 5.0) or mem_delta > 15.0:
+                        sudden_spike = True
+                        log.info(f"🚀 Sudden heavy application launch detected! CPU delta: +{cpu_delta:.1f}%, Mem delta: +{mem_delta:.1f}%. Bypassing model inference.")
+
+                self._prev_raw_cpu = raw_cpu
+                self._prev_raw_mem = raw_mem
+
+                if sudden_spike:
+                    # Rule-based bypass: force immediate optimization without calling neural network inference
+                    confidence = 0.98
+                    pred_cpu = raw_cpu
+                    pred_mem = raw_mem
+                    attributions = [0.75, 0.15, 0.05, 0.05]  # Attribute bottleneck primarily to CPU load
+
+                    if confidence >= CONFIDENCE_THRESHOLD * 0.85:
+                        now_warn = time.monotonic()
+                        if now_warn - self._last_warning_time > 60.0:
+                            self._last_warning_time = now_warn
+                            self._notifier.notify_warning(confidence, pred_cpu, pred_mem)
+
+                    now = time.monotonic()
+                    if now - self._last_action_time > 30:
+                        self._last_action_time = now
+                        action = self._action.evaluate(confidence, pred_cpu, pred_mem)
+                        if action.action_taken:
+                            self._notifier.notify_suspend(action.affected_names, confidence)
+
+                elif len(self._window) == WINDOW_SIZE:
                     window_arr = np.array(self._window, dtype=np.float32)
                     confidence, pred_cpu, pred_mem = self._engine.predict(window_arr)
                     
@@ -482,7 +545,10 @@ class Pipeline:
                         pred_cpu   = max(pred_cpu, self._ema_cpu)
                         
                     if confidence >= CONFIDENCE_THRESHOLD * 0.85:
-                        self._notifier.notify_warning(confidence, pred_cpu, pred_mem)
+                        now_warn = time.monotonic()
+                        if now_warn - self._last_warning_time > 60.0:
+                            self._last_warning_time = now_warn
+                            self._notifier.notify_warning(confidence, pred_cpu, pred_mem)
                     
                     # Diagnostic logging
                     if int(time.monotonic()) % 10 == 0:
