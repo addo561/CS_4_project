@@ -170,8 +170,8 @@ All application components are organized within a structured workspace layout:
 ```
 Final_year/
 ├── src/
-│   ├── main.py            # Modern Flet-based dashboard (primary entry point)
-│   ├── main_pyqt.py       # PyQt6-based fallback dashboard
+│   ├── optimizer_service.py # Silent background optimization engine and IPC server
+│   ├── dashboard.py       # Flet-based client dashboard GUI
 │   ├── config.py          # Central settings, constants, and Whitelists
 │   ├── core/
 │   │   ├── pipeline.py       # Live 1Hz telemetry polling & inference coordination
@@ -276,10 +276,15 @@ python3 src/training/train.py
 ```
 
 ### 5. Launching the App
-Start the high-performance Flet dashboard:
+First start the silent background optimization service:
 ```bash
-python3 src/main.py
+python3 src/optimizer_service.py
 ```
+Then launch the optional Flet dashboard GUI client:
+```bash
+python3 src/dashboard.py
+```
+*(Alternatively, you can just double-click `Run_Windows.bat` or `Run_macOS.command` to automatically start both.)*
 
 ---
 *KNUST Final Year Project — Group 4 | Built with Flet, PyTorch, ONNX Runtime, and psutil*

@@ -44,7 +44,7 @@ def get_app_version() -> str:
                         return f"{ver} (Stable)"
             except Exception:
                 pass
-    return "v2.6.0 (Stable)"
+    return "v2.7.0 (Stable)"
 
 VERSION = get_app_version()
 
@@ -109,6 +109,7 @@ POLL_INTERVAL_SEC   = 1.0       # seconds between each telemetry sample
 QUEUE_MAX_SIZE      = 500       # max samples buffered in memory before flush
 FLUSH_EVERY_N       = 60        # flush to CSV every N samples (~60 seconds)
 TEMP_FALLBACK       = -1.0      # sentinel value when temps unavailable (e.g. VMs)
+IPC_PORT            = 5050      # Default port for IPC between service and dashboard
 
 # ── Feature Columns (order must stay consistent across all modules) ───────────
 FEATURE_COLS = [
@@ -212,7 +213,7 @@ def save_user_whitelist(whitelist: set[str]) -> bool:
 
 def load_user_settings() -> dict:
     """Loads settings like active performance profile."""
-    defaults = {"profile": "Balanced"}
+    defaults = {"profile": "Balanced", "autopilot": True}
     if SETTINGS_PATH and os.path.isfile(SETTINGS_PATH):
         try:
             with open(SETTINGS_PATH, "r", encoding="utf-8") as f:

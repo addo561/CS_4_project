@@ -51,6 +51,9 @@ if errorlevel 1 (
 )
 
 REM Run the app
-echo Launching System Resource Optimizer...
-python src\main.py
+echo Launching System Resource Optimizer background service...
+start "" pythonw src\optimizer_service.py
+
+echo Launching Dashboard UI...
+python src\dashboard.py
 pause

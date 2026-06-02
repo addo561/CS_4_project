@@ -59,12 +59,12 @@ The built project repository delivers a structured workspace containing the foll
 ├── Run_Windows.bat        <- One-click launcher that auto-installs requirements and runs isolated venv Python on Windows
 ├── Run_macOS.command      <- One-click launcher that auto-installs requirements and runs isolated venv Python on macOS
 ├── SystemResourceOptimizer.spec <- PyInstaller build file that collects all Flet submodules and client binaries
-├── requirements.txt       <- Pinpoints all required versions (including PyQt6, flet, flet-desktop, psutil, and onnxruntime)
+├── requirements.txt       <- Pinpoints all required versions (including flet, flet-desktop, psutil, and onnxruntime)
 ├── deliverables.txt       <- This functional roadmap and list of deliverables
 │
 ├── src/
-│   ├── main.py            <- Primary modern Flet dashboard application
-│   ├── main_pyqt.py       <- Fallback PyQt6 dashboard application (untouched PyQt6 historical reference)
+│   ├── optimizer_service.py <- Silent background optimization engine and IPC server
+│   ├── dashboard.py       <- Primary modern Flet dashboard client application
 │   ├── config.py          <- Central configurations, whitelists, and model parameters
 │   │
 │   ├── core/
@@ -87,16 +87,18 @@ The built project repository delivers a structured workspace containing the foll
     ├── dataset_collection.docx  <- Document A: Telemetry parameters and collection setup
     ├── model_documentation.docx <- Document B: GRU gate equations and loss-metric reports
     ├── data_pipeline.docx       <- Document C: Pipeline scaling, ONNX inference, and Action Engine
+    ├── database_handling.docx   <- Document: Telemetry data store & configuration persistence
+    ├── system_architecture.docx <- Document: End-to-end system architecture & design
     ├── ui_documentation.docx    <- Document D: Flet design system, thread-safe queues, and canvas charts
     ├── mitigation_strategy.docx <- Sub-Module Upgrade: Cross-Platform Resource Mitigation Strategy
     ├── project_documentation.docx <- Complete academic project compendium and reference
-    └── System_Resource_Optimizer_Documentation.docx <- Unified master academic documentation compendium (All modules combined)
+    ├── System_Resource_Optimizer_Documentation.docx <- Unified master academic documentation compendium (All modules combined)
 
 -----------------------------------------------------------------------------
 3. SYSTEM GUARANTEES & ACADEMIC OUTCOMES
 -----------------------------------------------------------------------------
 
-- Completely Free of PyQt6 Signal/Slot Dependencies in Flet: The application uses a thread-safe Queue architecture to bridge the background Python engine and the UI rendering loop, preserving a complete architecture separation.
+- Client-Server Architecture: The application uses a local IPC TCP socket connection (port 5050) to completely decouple the background optimizer service and the Flet dashboard client, allowing the optimization loop to run continuously and silently in the background while the dashboard GUI remains optional and launchable at any time.
 - Complete Academic Documentation: All Word manuals (`.docx`) in the docs directory have been updated programmatically to perfectly match the final Flet dashboard, replacing obsolete references to PyQtGraph or PyQt6 with Flet Canvas rolls and Queueing locks.
 - One-Click Standalone Executables: GitHub Actions triggers precisely 1 build per release tag (`v*`) and uses PyInstaller to bundle the `flet-desktop` package and the ONNX models into standalone executables, ready to launch instantly on Windows and macOS.
 
@@ -111,7 +113,7 @@ To ensure all deliverables are fully met, follow these platform-agnostic, step-b
     * On Windows: Double-click 'Run_Windows.bat'.
     * On macOS: Double-click 'Run_macOS.command' (or run 'chmod +x Run_macOS.command && ./Run_macOS.command' in Terminal).
   - Expected Outcome: 
-    * The terminal should launch, automatically check for Python, set up an isolated virtual environment ('venv'), pre-install all pinning requirements (including 'flet' and 'flet-desktop' to prevent import NameErrors), and start the application instantly with zero manual commands.
+    * The terminal should launch, automatically check for Python, set up an isolated virtual environment ('venv'), pre-install all pinning requirements, and launch both the background service (`optimizer_service.py`) and the dashboard client (`dashboard.py`) automatically with zero manual commands.
 
 [Test 2] First-Launch Local Calibration Verification
   - Setup: If the application has been run before, delete or rename the local scaler file to simulate a brand-new user install:

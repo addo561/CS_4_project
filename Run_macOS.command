@@ -29,8 +29,11 @@ echo "App bundle not found — running from source ..."
 cd "$SCRIPT_DIR"
 
 if [ -f "$SCRIPT_DIR/venv/bin/python" ]; then
-    echo "Found virtual environment — running app with venv Python ..."
-    "$SCRIPT_DIR/venv/bin/python" src/main.py
+    echo "Found virtual environment — starting background service..."
+    nohup "$SCRIPT_DIR/venv/bin/python" src/optimizer_service.py >/dev/null 2>&1 &
+    
+    echo "Launching Dashboard UI..."
+    "$SCRIPT_DIR/venv/bin/python" src/dashboard.py
     exit 0
 fi
 
@@ -40,4 +43,5 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-python3 src/main.py
+nohup python3 src/optimizer_service.py >/dev/null 2>&1 &
+python3 src/dashboard.py

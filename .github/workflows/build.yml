@@ -55,7 +55,7 @@ jobs:
             TAG="${{ github.ref_name }}"
             echo "$TAG" > src/assets/version.txt
           else
-            echo "v2.6.0" > src/assets/version.txt
+            echo "v2.7.0" > src/assets/version.txt
           fi
           echo "Built with version: $(cat src/assets/version.txt)"
 
@@ -111,7 +111,7 @@ jobs:
             $tag = "${{ github.ref_name }}"
             Set-Content -Path src/assets/version.txt -Value $tag
           } else {
-            Set-Content -Path src/assets/version.txt -Value "v2.6.0"
+            Set-Content -Path src/assets/version.txt -Value "v2.7.0"
           }
           Write-Host "Built with version: $(Get-Content src/assets/version.txt)"
 
@@ -122,7 +122,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Windows-Exe
-          path: dist/SystemResourceOptimizer.exe
+          path: |
+            dist/SystemResourceOptimizer.exe
+            dist/SystemResourceOptimizerService.exe
           retention-days: 30
 
   # ────────────────────────────────────────────────────────────────────────────
@@ -156,15 +158,16 @@ jobs:
           files: |
             release/System_Resource_Optimizer.dmg
             release/SystemResourceOptimizer.exe
+            release/SystemResourceOptimizerService.exe
           body: |
             ## System Resource Optimizer — ${{ github.ref_name }}
 
             ### Downloads
             | Platform | File |
             |---|---|
-            | 🍎 macOS | `System_Resource_Optimizer.dmg` → Open → Drag to Applications |
-            | 🪟 Windows | `SystemResourceOptimizer.exe` → Run directly |
+            | 🍎 macOS | `System_Resource_Optimizer.dmg` (Contains both Dashboard and Background Service) |
+            | 🪟 Windows | `SystemResourceOptimizer.exe` (Dashboard Client) & `SystemResourceOptimizerService.exe` (Silent Background Service) |
 
-            ### First Launch
-            - **macOS**: Right-click the `.dmg` → Open. After dragging to Applications, Right-click the app → Open → Open (bypasses Gatekeeper).
-            - **Windows**: Double-click `.exe`. (Allow Windows Defender/Firewall if prompted).
+            ### First Launch & Usage
+            - **macOS**: Double-click `System_Resource_Optimizer.dmg`, drag the app to Applications. The Dashboard will auto-start the silent background service process.
+            - **Windows**: Download both `.exe` files into the same folder. Launch `SystemResourceOptimizer.exe` (Dashboard), which will automatically start `SystemResourceOptimizerService.exe` (Silent Background Service) in the background.
