@@ -43,11 +43,16 @@ def _send_windows(title: str, message: str, timeout: int):
     if not _PLYER_OK:
         return
     try:
+        _DIR = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.abspath(os.path.join(_DIR, "..", "assets", "icon.ico"))
+        if not os.path.exists(icon_path):
+            icon_path = None
         _plyer_notification.notify(
             app_name=APP_NAME,
             title=title,
             message=message,
             timeout=timeout,
+            app_icon=icon_path,
         )
     except Exception as exc:
         log.warning(f"Windows toast failed: {exc}")

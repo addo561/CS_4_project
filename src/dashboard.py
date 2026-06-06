@@ -251,7 +251,7 @@ class RollingChart:
 
 # ── Metric tile ───────────────────────────────────────────────────────────────
 class MetricTile:
-    def __init__(self, label: str, unit: str = "%", accent: str = ACCENT):
+    def __init__(self, label: str, unit: str = "%", accent: str = ACCENT, tooltip: Optional[str] = None):
         self.unit = unit
         self._value = body_text("—", size=26, weight=ft.FontWeight.BOLD)
         self._bar = ft.ProgressBar(
@@ -273,6 +273,7 @@ class MetricTile:
             ),
             padding=12,
             expand=True,
+            tooltip=tooltip,
         )
 
     def update(self, value: float) -> None:
@@ -365,6 +366,7 @@ def build_sidebar(on_nav: Callable[[str], None], active: str = "dashboard") -> f
                 nav_item("AI Analytics", ft.Icons.INSIGHTS, "analytics"),
                 nav_item("Science Hub", ft.Icons.SCHOOL, "science_hub"),
                 nav_item("Settings", ft.Icons.SETTINGS, "settings"),
+                nav_item("Help & UX Guide", ft.Icons.HELP, "help"),
                 ft.Container(expand=True),
                 body_text("Next-Gen · Flet", size=10, color=MUTED),
             ],
@@ -786,11 +788,172 @@ def build_science_hub_view() -> ft.Column:
     )
 
 
+def build_help_view(page: ft.Page) -> ft.Column:
+    return ft.Column(
+        [
+            body_text("Elite User Experience & Help System", size=14, weight=ft.FontWeight.BOLD, color=ACCENT),
+            ft.Divider(height=1, color=BORDER),
+            
+            # 1. Quick Start Guide
+            body_text("Quick Start Guide", size=13, weight=ft.FontWeight.BOLD),
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Column([body_text("1. Install", weight=ft.FontWeight.BOLD), body_text("Run installer/setup", size=10, color=MUTED)], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, size=16, color=MUTED),
+                        ft.Column([body_text("2. Launch", weight=ft.FontWeight.BOLD), body_text("Start dashboard/service", size=10, color=MUTED)], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, size=16, color=MUTED),
+                        ft.Column([body_text("3. Wait 60s", weight=ft.FontWeight.BOLD), body_text("Fill GRU history queue", size=10, color=MUTED)], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, size=16, color=MUTED),
+                        ft.Column([body_text("4. Toggle Auto-Pilot", weight=ft.FontWeight.BOLD), body_text("Enable automatic actions", size=10, color=MUTED)], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, size=16, color=MUTED),
+                        ft.Column([body_text("5. Done", weight=ft.FontWeight.BOLD, color=ACCENT), body_text("System runs optimized", size=10, color=ACCENT)], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    ],
+                    spacing=14,
+                    alignment=ft.MainAxisAlignment.SPACE_EVENLY,
+                ),
+                bgcolor=CARD_ALT,
+                padding=14,
+                border_radius=8,
+            ),
+            
+            # 2. Strategy Table
+            body_text("In-App Help & Documentation Strategy", size=13, weight=ft.FontWeight.BOLD),
+            ft.DataTable(
+                columns=[
+                    ft.DataColumn(ft.Container(content=body_text("Format", weight=ft.FontWeight.BOLD), width=150)),
+                    ft.DataColumn(ft.Container(content=body_text("Where", weight=ft.FontWeight.BOLD), width=250)),
+                    ft.DataColumn(ft.Container(content=body_text("Content", weight=ft.FontWeight.BOLD), width=350)),
+                ],
+                rows=[
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(body_text("Tooltips", size=11)),
+                            ft.DataCell(body_text("Hover over any UI element (ⓘ icon)", size=11)),
+                            ft.DataCell(body_text("1-sentence explanation", size=11)),
+                        ],
+                        color=CARD_ALT,
+                    ),
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(body_text("Quick Start Guide", size=11)),
+                            ft.DataCell(body_text("In the installer folder or Help menu", size=11)),
+                            ft.DataCell(body_text("5 steps: Install → Launch → Wait 60s → Auto-Pilot", size=11)),
+                        ],
+                    ),
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(body_text("In-app Help Sidebar", size=11)),
+                            ft.DataCell(body_text("Click ❓ icon on top of dashboard", size=11)),
+                            ft.DataCell(body_text("FAQ regarding suspension, whitelist, recovery", size=11)),
+                        ],
+                        color=CARD_ALT,
+                    ),
+                ],
+                border=ft.Border.all(1, BORDER),
+                border_radius=8,
+                heading_row_color=CARD,
+            ),
+        ],
+        spacing=16,
+        scroll=ft.ScrollMode.AUTO,
+        expand=True,
+    )
+
+
+def open_help_sidebar(page: ft.Page):
+    if not page.end_drawer:
+        page.end_drawer = ft.NavigationDrawer(
+            controls=[
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Icon(ft.Icons.HELP_OUTLINE, color=ACCENT, size=24),
+                                    body_text("SRO In-App Help", size=18, weight=ft.FontWeight.BOLD),
+                                    ft.Container(expand=True),
+                                    ft.IconButton(
+                                        icon=ft.Icons.CLOSE,
+                                        icon_color=MUTED,
+                                        on_click=lambda _: close_help_sidebar(page)
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.CENTER,
+                            ),
+                            ft.Divider(color=BORDER),
+                            
+                            # FAQ section
+                            body_text("Frequently Asked Questions", size=14, weight=ft.FontWeight.BOLD, color=ACCENT),
+                            
+                            ft.Container(
+                                content=ft.Column([
+                                    body_text("Q: Why suspend instead of kill?", size=12, weight=ft.FontWeight.BOLD, color=TEXT),
+                                    body_text("A: Killing a process can cause data loss or crash system services. Suspending safely pauses thread execution to free up CPU time and compositor threads, which can be undone later.", size=11, color=MUTED),
+                                ]),
+                                bgcolor=CARD_ALT,
+                                padding=8,
+                                border_radius=6,
+                            ),
+                            
+                            ft.Container(
+                                content=ft.Column([
+                                    body_text("Q: What does the Whitelist do?", size=12, weight=ft.FontWeight.BOLD, color=TEXT),
+                                    body_text("A: It lists crucial apps (e.g. system drivers, antivirus, custom editors) that the SRO will never throttle or suspend.", size=11, color=MUTED),
+                                ]),
+                                bgcolor=CARD_ALT,
+                                padding=8,
+                                border_radius=6,
+                            ),
+                            
+                            ft.Container(
+                                content=ft.Column([
+                                    body_text("Q: How can I restore processes?", size=12, weight=ft.FontWeight.BOLD, color=TEXT),
+                                    body_text("A: Click 'Undo' to instantly resume all throttled tasks, or disable the 'Auto-Pilot' mode to handle it manually.", size=11, color=MUTED),
+                                ]),
+                                bgcolor=CARD_ALT,
+                                padding=8,
+                                border_radius=6,
+                            ),
+                        ],
+                        spacing=12,
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                    padding=20,
+                    width=320,
+                )
+            ]
+        )
+    page.end_drawer.open = True
+    page.update()
+
+
+def close_help_sidebar(page: ft.Page):
+    if page.end_drawer:
+        page.end_drawer.open = False
+        page.update()
+
+
 def build_settings_view(autopilot_status: ft.Text, page: ft.Page) -> ft.Column:
-    # 1. Performance Profiles & Radio Selection
-    # Get current settings via IPC
     resp = client.send_request({"type": "get_full_state"})
     current_profile = resp.get("active_profile", "Balanced") if resp.get("connected") else "Balanced"
+    optimizer_active = resp.get("optimizer_active", True) if resp.get("connected") else True
+
+    def on_optimizer_toggle(e):
+        val = e.control.value
+        client.send_request({"type": "command", "cmd": "toggle_optimizer", "value": val})
+        page.snack_bar = ft.SnackBar(
+            ft.Text(f"Background optimizer engine {'resumed' if val else 'suspended'}.", color=TEXT),
+            bgcolor=CARD_ALT,
+        )
+        page.snack_bar.open = True
+        page.update()
+
+    optimizer_switch = ft.Switch(
+        value=optimizer_active,
+        active_color=ACCENT,
+        on_change=on_optimizer_toggle,
+    )
 
     active_profile_name = ft.Text(f"Current Profile: {current_profile}", color=ACCENT, size=14, weight=ft.FontWeight.W_600)
     profile_details = ft.Text("", color=MUTED, size=12)
@@ -926,12 +1089,22 @@ def build_settings_view(autopilot_status: ft.Text, page: ft.Page) -> ft.Column:
 
     # 3. Service Control Lifecycle Manager
     def on_shutdown_click(e):
+        page.user_shutdown_requested = True
         shutdown_resp = client.send_request({"type": "command", "cmd": "shutdown"})
         if shutdown_resp.get("status") == "ok":
             page.snack_bar = ft.SnackBar(ft.Text("Background service shutdown signal sent. All processes resumed.", color=TEXT), bgcolor=CARD_ALT)
             page.snack_bar.open = True
             page.update()
+            # Cleanly close the app window after a 2-second delay
+            def close_window():
+                time.sleep(2.0)
+                try:
+                    page.window.close()
+                except Exception:
+                    pass
+            threading.Thread(target=close_window, daemon=True).start()
         else:
+            page.user_shutdown_requested = False
             page.snack_bar = ft.SnackBar(ft.Text("Failed to stop service: " + shutdown_resp.get("message", ""), color=CRIT), bgcolor=CARD_ALT)
             page.snack_bar.open = True
             page.update()
@@ -979,6 +1152,41 @@ def build_settings_view(autopilot_status: ft.Text, page: ft.Page) -> ft.Column:
                                             ],
                                             spacing=8,
                                         ),
+                                        # Background Optimizer Engine Toggle
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
+                                                    ft.Row(
+                                                        [
+                                                            ft.Column(
+                                                                [
+                                                                    body_text("Background Optimizer Engine", size=14, weight=ft.FontWeight.W_600),
+                                                                    body_text("Runs active telemetry & inference loops", size=11, color=MUTED),
+                                                                ],
+                                                                spacing=1,
+                                                            ),
+                                                            ft.Container(expand=True),
+                                                            optimizer_switch,
+                                                        ],
+                                                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                                    ),
+                                                    ft.Divider(height=8, color=BORDER),
+                                                    body_text(
+                                                        "When turned OFF, SRO suspends all active resource monitoring and AI predictions, "
+                                                        "safely resuming all suspended processes. The IPC client remains connected to "
+                                                        "allow re-enabling.",
+                                                        size=12,
+                                                        color=MUTED,
+                                                    ),
+                                                ],
+                                                spacing=8,
+                                            ),
+                                            bgcolor=CARD_ALT,
+                                            padding=14,
+                                            border_radius=8,
+                                            border=ft.Border.all(1, BORDER),
+                                        ),
+                                        # Auto-Pilot Info
                                         ft.Container(
                                             content=ft.Column(
                                                 [
@@ -1203,10 +1411,10 @@ def build_dashboard_content(
     callbacks: dict,
 ) -> tuple[DashboardUI, ft.Column, ft.Column, ft.Column, ft.Container]:
     cpu_m, mem_m, temp_m, swap_m = (
-        MetricTile("CPU", "%", ACCENT),
-        MetricTile("Memory", "%", WARN),
-        MetricTile("Temp", "°C", CRIT),
-        MetricTile("Swap", "%", ACCENT),
+        MetricTile("CPU", "%", ACCENT, tooltip="Current CPU usage (average across all cores)"),
+        MetricTile("Memory", "%", WARN, tooltip="Current system RAM consumption"),
+        MetricTile("Temp", "°C", CRIT, tooltip="CPU packaging temperature (physical or simulated)"),
+        MetricTile("Swap", "%", ACCENT, tooltip="System paging virtual swap file usage"),
     )
     cpu_c = RollingChart("CPU", ACCENT)
     mem_c = RollingChart("Memory", WARN)
@@ -1219,6 +1427,7 @@ def build_dashboard_content(
         stroke_width=8,
         color=ACCENT,
         bgcolor=CARD_ALT,
+        tooltip="AI Bottleneck Risk forecast within the next 30 seconds",
     )
     gauge_value = body_text("—", size=32, weight=ft.FontWeight.BOLD, color=ACCENT)
     gauge_insight = body_text(
@@ -1300,6 +1509,7 @@ def build_dashboard_content(
         value=False, 
         active_color=ACCENT,
         on_change=lambda e: callbacks["on_autopilot"](e) if "on_autopilot" in callbacks else None,
+        tooltip="Enable/disable autonomous AI bottleneck mitigation actions",
     )
     boost_btn = ft.Button(
         "Boost",
@@ -1313,6 +1523,7 @@ def build_dashboard_content(
         ),
         expand=True,
         on_click=lambda e: callbacks["on_boost"](e) if "on_boost" in callbacks else None,
+        tooltip="Manually trigger process resource compression & garbage collection",
     )
     undo_btn = ft.OutlinedButton(
         "Undo",
@@ -1324,6 +1535,7 @@ def build_dashboard_content(
         ),
         expand=True,
         on_click=lambda e: callbacks["on_undo"](e) if "on_undo" in callbacks else None,
+        tooltip="Restore original scheduling limits and affinities to all suspended processes",
     )
 
     actions_panel = card(
@@ -1415,6 +1627,13 @@ def build_dashboard_content(
                 [
                     body_text("Dashboard", size=22, weight=ft.FontWeight.BOLD),
                     ft.Container(expand=True),
+                    ft.IconButton(
+                        icon=ft.Icons.HELP_OUTLINE,
+                        icon_color=MUTED,
+                        icon_size=20,
+                        tooltip="Open Help & FAQ Sidebar",
+                        on_click=lambda e: open_help_sidebar(page),
+                    ),
                     body_text("Live telemetry", size=12, color=MUTED),
                 ],
             ),
@@ -1572,12 +1791,14 @@ def run_app(page: ft.Page) -> None:
 
     ui, dashboard_view, analytics_view, settings_view, right_rail = build_dashboard_content(page, ui_callbacks)
     science_hub_view = build_science_hub_view()
+    help_view = build_help_view(page)
     
     views = {
         "dashboard": dashboard_view,
         "analytics": analytics_view,
         "science_hub": science_hub_view,
         "settings": settings_view,
+        "help": help_view,
     }
 
     for k, view in views.items():
@@ -1589,7 +1810,7 @@ def run_app(page: ft.Page) -> None:
         view.visible = (k == "dashboard")
 
     views_stack = ft.Stack(
-        controls=[dashboard_view, analytics_view, science_hub_view, settings_view],
+        controls=[dashboard_view, analytics_view, science_hub_view, settings_view, help_view],
         expand=True,
     )
 
@@ -1736,6 +1957,10 @@ def run_app(page: ft.Page) -> None:
         first_connect = True
         service_start_attempted = False
         while True:
+            if getattr(page, "user_shutdown_requested", False):
+                await asyncio.sleep(1.0)
+                continue
+
             if not client.connected:
                 # Show overlay immediately
                 overlay_host.visible = True
@@ -1745,7 +1970,7 @@ def run_app(page: ft.Page) -> None:
                     pass
                 
                 # Attempt to auto-start if not done yet
-                if not service_start_attempted:
+                if not service_start_attempted and not getattr(page, "user_shutdown_requested", False):
                     launch_background_service()
                     service_start_attempted = True
                     await asyncio.sleep(1.0)
@@ -1832,7 +2057,14 @@ def run_app(page: ft.Page) -> None:
                         
                     _update_analytics_dict(ui, latest)
 
-                    if latest.get("calibrating"):
+                    if not resp.get("optimizer_active", True):
+                        ui.gauge_ring.value = 0.0
+                        ui.gauge_ring.color = MUTED
+                        ui.gauge_value.value = "OFF"
+                        ui.gauge_value.color = MUTED
+                        ui.gauge_insight.value = "Optimizer engine suspended by user"
+                        ui.gauge_insight.color = MUTED
+                    elif latest.get("calibrating"):
                         cal_prog = resp.get("calib_progress", (0, CALIBRATION_SECONDS))
                         elapsed, total = cal_prog
                         if elapsed != -1:

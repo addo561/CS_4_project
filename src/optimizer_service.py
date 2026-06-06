@@ -231,12 +231,14 @@ class OptimizerService:
                             "name": sp.name,
                             "suspended_at": sp.suspended_at
                         })
+                optimizer_active = bool(self.pipeline and self.pipeline._thread and self.pipeline._thread.is_alive())
                 return {
                     "connected": True,
                     "calibrating": self.calibrating,
                     "calib_progress": (self.calib_elapsed, self.calib_total),
                     "autopilot_enabled": self.autopilot_enabled,
                     "active_profile": self.active_profile,
+                    "optimizer_active": optimizer_active,
                     "logs": list(self.recent_logs),
                     "history": list(self.history),
                     "suspended_processes": suspended,
@@ -252,12 +254,14 @@ class OptimizerService:
                             "name": sp.name,
                             "suspended_at": sp.suspended_at
                         })
+                optimizer_active = bool(self.pipeline and self.pipeline._thread and self.pipeline._thread.is_alive())
                 return {
                     "connected": True,
                     "calibrating": self.calibrating,
                     "calib_progress": (self.calib_elapsed, self.calib_total),
                     "autopilot_enabled": self.autopilot_enabled,
                     "active_profile": self.active_profile,
+                    "optimizer_active": optimizer_active,
                     "logs": list(self.recent_logs),
                     "latest_result": self.last_result,
                     "suspended_processes": suspended,
@@ -288,6 +292,31 @@ class OptimizerService:
                 save_user_settings(settings)
                 self.add_log(f"Auto-Pilot {'Activated' if val else 'Deactivated'}", WARN if val else MUTED)
                 return {"status": "ok"}
+                
+            elif cmd == "toggle_optimizer":
+                val = req.get("value", True)
+                if val:
+                    if self.pipeline:
+                        if not self.pipeline._thread or not self.pipeline._thread.is_alive():
+                            self.pipeline.start()
+                            self.add_log("Optimizer engine resumed", ACCENT)
+                            if self.pipeline._notifier:
+                                self.pipeline._notifier.send(
+                                    title="⚡ SRO: Optimizer Resumed",
+                                    message="Background optimizer loop has been resumed."
+                                )
+                    return {"status": "ok", "optimizer_active": True}
+                else:
+                    if self.pipeline:
+                        if self.pipeline._thread and self.pipeline._thread.is_alive():
+                            if self.pipeline._notifier:
+                                self.pipeline._notifier.send(
+                                    title="⚡ SRO: Optimizer Suspended",
+                                    message="Background optimizer loop has been suspended. All processes resumed."
+                                )
+                            self.pipeline.stop()
+                            self.add_log("Optimizer engine suspended", MUTED)
+                    return {"status": "ok", "optimizer_active": False}
                 
             elif cmd == "set_profile":
                 val = req.get("value", "Balanced")
@@ -375,6 +404,15 @@ class OptimizerService:
                 
         # Stop pipeline
         if self.pipeline:
+            if hasattr(self.pipeline, "_notifier") and self.pipeline._notifier:
+                try:
+                    self.pipeline._notifier.send(
+                        title="⚡ SRO: Optimizer Suspended",
+                        message="Background optimizer has been suspended. All processes resumed."
+                    )
+                    time.sleep(0.5)  # Let the async notification spawn
+                except Exception as e:
+                    log.error(f"Failed to send shutdown notification: {e}")
             self.pipeline.stop()
             self.pipeline = None
             
