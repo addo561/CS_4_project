@@ -180,7 +180,7 @@ exe_srv = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,  # Runs silently in the background
+    console=not is_win,  # False on Windows (runs silently), True on macOS (avoids Dock icon)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -219,5 +219,7 @@ if platform.system() == 'Darwin':
             "NSHumanReadableCopyright": "© 2026 KNUST Group 4",
             "LSMinimumSystemVersion":   "10.14",
             "NSRequiresAquaSystemAppearance": False,   # supports dark mode
+            "LSBackgroundOnly":         False,
+            "LSUIElement":              False,
         },
     )

@@ -148,6 +148,7 @@ The model was trained in PyTorch with **Early Stopping** (patience = 10) to sele
 | 🤖 **Auto-Pilot Switch** | Toggle autonomous mode in the Settings page or the Right Rail. When ON, the optimizer automatically invokes the One-Click Boost routine whenever AI confidence is $\ge 80\%$ (limited by a 45s safety cooldown). |
 | 🚀 **One-Click Boost** | Manually triggers an immediate optimization event: resumes all suspended processes, runs Python garbage collection, and clears memory. |
 | ↩ **Undo Button** | Immediately restores all processes that were suspended during the current session. Disabled when no processes are suspended. |
+| ⚡ **Toggle Background Service** | Suspends or resumes the active telemetry processing and AI inference loop of the background optimizer engine via IPC. Disabling it releases CPU overhead while keeping the socket server active so the dashboard stays connected. |
 
 ### The Action Engine: Cross-Platform Resource Mitigation Strategy
 Rather than abruptly suspending background tasks (which can lock OS resources and trigger system-wide freezes), the optimizer implements a cross-platform, deterministic mitigation strategy that utilizes dynamic process scheduling and memory allocation:
@@ -285,6 +286,49 @@ Then launch the optional Flet dashboard GUI client:
 python3 src/dashboard.py
 ```
 *(Alternatively, you can just double-click `Run_Windows.bat` or `Run_macOS.command` to automatically start both.)*
+
+## ❓ Help Center & User Guide
+
+To ensure high user accessibility and low cognitive friction, the System Resource Optimizer includes a multi-tiered in-app documentation framework and Help Center.
+
+### 1. Quick Start Guide
+1. **Install**: Run the installer/setup script for your platform.
+2. **Launch**: Start both the background service and the dashboard GUI (or double-click `Run_Windows.bat` / `Run_macOS.command` to start both automatically).
+3. **Wait 60 Seconds**: Keep the app running for a minute to allow the GRU engine to populate its sliding telemetry history queue.
+4. **Toggle Auto-Pilot**: Enable the **Auto-Pilot** switch in the dashboard or settings to activate automated optimization.
+5. **Done**: SRO will run silently in the background, predicting bottlenecks and maintaining system responsiveness.
+
+### 2. In-App Help & Documentation Strategy
+
+| Format | Where | Content |
+| :--- | :--- | :--- |
+| **Tooltips** | Hover over any UI element (ⓘ icon) | 1-sentence quick explanation of the metric or control. |
+| **Quick Start Guide** | Installer folder or Help menu | 5-step checklist to get the optimizer running (Install → Launch → Wait 60s → Auto-Pilot). |
+| **In-app Help Sidebar** | Click ❓ icon on top-right of dashboard | A slide-out sidebar containing FAQs regarding suspension, whitelist, and recovery. |
+| **Video Demo Link** | Help menu → "Watch 1-min demo" | Link to an unlisted YouTube demo or local MP4 showing SRO's live responsiveness. |
+
+### 3. Frequently Asked Questions (FAQ)
+
+* **Q: Why does the optimizer suspend processes instead of killing them?**
+  * **A:** Killing a process can cause unsaved data loss or crash critical system services. Suspending safely pauses thread execution (`SIGSTOP` on macOS/Linux / `NtSuspendThread` on Windows) to free up CPU time and compositor threads, allowing the user to resume them at any time.
+* **Q: What is the Whitelist used for?**
+  * **A:** The Whitelist specifies crucial processes (such as system drivers, antivirus software, and custom development editors) that the SRO Action Engine must never throttle, suspend, or modify.
+* **Q: How can I restore suspended/throttled processes?**
+  * **A:** You can click the **Undo** button in the dashboard to instantly resume all throttled tasks, or disable **Auto-Pilot** mode to manage processes manually.
+
+## 🍎 macOS Dock Icon & Notification Notes
+
+### 1. Dual Icons in Dock (Flet vs. App Icon)
+During development or initial compilation, macOS caches application icons based on the bundle identifier in its system Launch Services database. If a version of the application was previously registered with the default Flet logo, macOS may continue to display the Flet icon or show both the main bundle and the Flet runner.
+**To fix the Dock icon cache:**
+1. Move the built application (`dist/System Resource Optimizer.app`) to your `/Applications` directory or rename it (e.g., to `SRO.app`).
+2. Restart the Dock and Finder to reload the caches:
+   ```bash
+   killall Dock && killall Finder
+   ```
+
+### 2. Notification Banner Shows Script Editor/osascript Icon
+On macOS, system notifications are triggered using the built-in `osascript` tool (AppleScript) for maximum compatibility with zero dependencies. Because the system runs the alert command through the `osascript` binary, macOS attributes the notification sender to the Script Editor application, showing its scroll/document icon. This is a standard macOS design restriction for command-line AppleScript notification delivery.
 
 ---
 *KNUST Final Year Project — Group 4 | Built with Flet, PyTorch, ONNX Runtime, and psutil*

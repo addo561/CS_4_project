@@ -123,6 +123,11 @@ def main():
     print("Overwriting main PNG icons...")
     base_img.resize((512, 512), Image.Resampling.LANCZOS).save(os.path.join(assets_dir, "icon.png"), "PNG")
     base_img.save(os.path.join(assets_dir, "icon_proper.png"), "PNG")
+
+    # Save as ICO for Windows notifications
+    print("Generating icon.ico for Windows...")
+    ico_sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+    base_img.save(os.path.join(assets_dir, "icon.ico"), format="ICO", sizes=ico_sizes)
     
     # Generate .icns file using iconutil on macOS
     icns_path = os.path.join(assets_dir, "icon.icns")
