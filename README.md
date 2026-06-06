@@ -316,6 +316,20 @@ To ensure high user accessibility and low cognitive friction, the System Resourc
 * **Q: How can I restore suspended/throttled processes?**
   * **A:** You can click the **Undo** button in the dashboard to instantly resume all throttled tasks, or disable **Auto-Pilot** mode to manage processes manually.
 
+### 4. Stopping/Killing the Background Service
+
+If you close the dashboard GUI but the background service daemon continues to run, you can shut it down using one of the following methods:
+
+* **Via Settings GUI (Recommended)**: Go to the **Settings** tab in the dashboard, and under the **Optimization Control** card, click **Stop Background Service**. This cleanly shuts down the service, restores all suspended processes, and closes the window.
+* **Via Terminal (If running the compiled `.app` bundle)**:
+  ```bash
+  pkill -f SystemResourceOptimizerService
+  ```
+* **Via Terminal (If running from Python source code)**:
+  ```bash
+  pkill -f optimizer_service.py
+  ```
+
 ## 🍎 macOS Dock Icon & Notification Notes
 
 ### 1. Dual Icons in Dock (Flet vs. App Icon)
