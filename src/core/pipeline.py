@@ -35,6 +35,25 @@ from core.collector import ThermalSimulator
 log = logging.getLogger("pipeline")
 
 
+def get_hardware_fingerprint() -> dict:
+    """Gets a dictionary of hardware features to identify the current device."""
+    try:
+        import psutil
+        import platform
+        # total memory rounded to nearest 100MB to avoid minor OS dynamic reporting differences
+        total_mem = round(psutil.virtual_memory().total / (1024 * 1024 * 100)) * (1024 * 1024 * 100)
+        return {
+            "cpu_count": psutil.cpu_count(logical=True),
+            "cpu_count_physical": psutil.cpu_count(logical=False),
+            "total_memory": total_mem,
+            "os_system": platform.system(),
+            "machine": platform.machine()
+        }
+    except Exception as e:
+        log.warning(f"Error generating hardware fingerprint: {e}")
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # PipelineResult — data packet sent to the UI on every cycle
 # ---------------------------------------------------------------------------
@@ -325,16 +344,51 @@ class Pipeline:
         self._feature_cols: Optional[list] = None
 
         # ── Calibration state ───────────────────────────────────────────────
-        # Priority: local calibrated scaler > bundled scaler > heuristic fallback
-        if os.path.isfile(LOCAL_SCALER_PATH):
+        # Determine if we should calibrate based on local scaler presence and hardware matching
+        hardware_matches = False
+        metadata_path = os.path.join(LOCAL_SCALER_DIR, "calibration_metadata.json") if LOCAL_SCALER_DIR else ""
+        
+        if os.path.isfile(LOCAL_SCALER_PATH) and os.path.isfile(metadata_path):
+            try:
+                import json
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    saved_fingerprint = json.load(f)
+                current_fingerprint = get_hardware_fingerprint()
+                
+                # Compare critical hardware attributes
+                if (saved_fingerprint.get("cpu_count") == current_fingerprint.get("cpu_count") and
+                    saved_fingerprint.get("cpu_count_physical") == current_fingerprint.get("cpu_count_physical") and
+                    saved_fingerprint.get("total_memory") == current_fingerprint.get("total_memory") and
+                    saved_fingerprint.get("os_system") == current_fingerprint.get("os_system") and
+                    saved_fingerprint.get("machine") == current_fingerprint.get("machine")):
+                    hardware_matches = True
+                else:
+                    log.info("Hardware fingerprint mismatch (new device or configuration changed). Forcing recalibration.")
+            except Exception as e:
+                log.warning("Failed to verify hardware fingerprint: %s. Assuming mismatch.", e)
+        else:
+            log.info("No local scaler or metadata found. Forcing recalibration.")
+
+        if hardware_matches and os.path.isfile(LOCAL_SCALER_PATH):
             self._scaler      = self._load_scaler(LOCAL_SCALER_PATH)
             self._calibrating = False
             log.info("Local calibrated scaler loaded from %s", LOCAL_SCALER_PATH)
         else:
+            # Delete old mismatched scaler and metadata files if they exist to avoid stale configuration
+            if os.path.isfile(LOCAL_SCALER_PATH):
+                try:
+                    os.remove(LOCAL_SCALER_PATH)
+                except Exception:
+                    pass
+            if os.path.isfile(metadata_path):
+                try:
+                    os.remove(metadata_path)
+                except Exception:
+                    pass
             self._scaler      = self._load_scaler(scaler_path)  # bundled fallback
             self._calibrating = True
             self._cal_buffer: list = []
-            log.info("No local scaler found — calibration mode active (%ds)", CALIBRATION_SECONDS)
+            log.info("Calibration mode active (%ds)", CALIBRATION_SECONDS)
 
         # Give the engine a reference to the scaler for proper inverse_transform
         self._engine._scaler = self._scaler
@@ -607,6 +661,18 @@ class Pipeline:
             os.makedirs(LOCAL_SCALER_DIR, exist_ok=True)
             with open(LOCAL_SCALER_PATH, "wb") as f:
                 pickle.dump(local_scaler, f)
+            
+            # Save the hardware fingerprint metadata
+            metadata_path = os.path.join(LOCAL_SCALER_DIR, "calibration_metadata.json") if LOCAL_SCALER_DIR else ""
+            if metadata_path:
+                try:
+                    import json
+                    with open(metadata_path, "w", encoding="utf-8") as f:
+                        json.dump(get_hardware_fingerprint(), f, indent=4)
+                    log.info("Calibration metadata saved successfully to %s", metadata_path)
+                except Exception as e:
+                    log.error("Failed to save calibration metadata: %s", e)
+            
             self._scaler      = local_scaler
             self._calibrating = False
             self._window.clear()    # fresh window with new scaler

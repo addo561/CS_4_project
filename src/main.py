@@ -2361,11 +2361,20 @@ def run_app(page: ft.Page) -> None:
     ui.sync_charts()
     page.update()
 
-    def on_window_event(e) -> None:
+    def on_disconnect(_):
         nonlocal pipeline
-        if e.data == "close" and pipeline:
-            pipeline.stop()
+        if pipeline:
+            try:
+                pipeline.stop()
+            except Exception:
+                pass
             pipeline = None
+
+    page.on_disconnect = on_disconnect
+
+    def on_window_event(e) -> None:
+        if e.data in ("close", "destroy"):
+            on_disconnect(None)
 
     page.window.on_event = on_window_event
 

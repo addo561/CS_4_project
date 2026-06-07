@@ -26,12 +26,27 @@ if _OS == "Windows":
         log.warning("plyer not installed — Windows toasts disabled.")
 
 
+from config import BASE_DIR
+
 def _send_macos(title: str, message: str):
-    """Use macOS built-in osascript — no external dependencies needed."""
+    """Use macOS built-in osascript. If packaged, attrib to app logo; if not, notify directly to bypass file dialog prompts."""
     # Escape quotes to avoid breaking the AppleScript string
     title   = title.replace('"', '\\"').replace("'", "\\'")
     message = message.replace('"', '\\"').replace("'", "\\'")
-    script  = f'display notification "{message}" with title "{title}"'
+    
+    # Check if running from packaged bundle
+    if getattr(sys, "frozen", False):
+        script = (
+            f'try\n'
+            f'    tell application id "com.knust.group4.systemresourceoptimizer" to display notification "{message}" with title "{title}"\n'
+            f'on error\n'
+            f'    display notification "{message}" with title "{title}"\n'
+            f'end try'
+        )
+    else:
+        # Avoid tell block to prevent macOS from prompting "Choose Application" dialog
+        script = f'display notification "{message}" with title "{title}"'
+        
     subprocess.Popen(
         ["osascript", "-e", script],
         stdout=subprocess.DEVNULL,
@@ -43,8 +58,7 @@ def _send_windows(title: str, message: str, timeout: int):
     if not _PLYER_OK:
         return
     try:
-        _DIR = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.abspath(os.path.join(_DIR, "..", "assets", "icon.ico"))
+        icon_path = os.path.join(BASE_DIR, "assets", "icon.ico")
         if not os.path.exists(icon_path):
             icon_path = None
         _plyer_notification.notify(
