@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 ROOT = os.path.dirname(os.path.abspath(SPEC))   # Final_year/
 
 # Read version dynamically from version.txt if it exists
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.9.0"
 version_file = os.path.join(ROOT, "src", "assets", "version.txt")
 if os.path.isfile(version_file):
     try:
@@ -141,8 +141,9 @@ pyz_srv = PYZ(a_srv.pure)
 
 _ICON = os.path.join(ROOT, "src", "assets", "icon.icns")
 if platform.system() == "Windows":
-    # On Windows, use the high-res PNG; PyInstaller/Pillow will convert it to ICO
-    _ICON = os.path.join(ROOT, "src", "assets", "icon_proper.png")
+    # Must be a real .ico file — PyInstaller embeds it in the EXE header
+    # so Windows Explorer and the taskbar show the custom icon.
+    _ICON = os.path.join(ROOT, "src", "assets", "icon.ico")
 
 is_win = platform.system() == "Windows"
 
@@ -220,6 +221,6 @@ if platform.system() == 'Darwin':
             "LSMinimumSystemVersion":   "10.14",
             "NSRequiresAquaSystemAppearance": False,   # supports dark mode
             "LSBackgroundOnly":         False,
-            "LSUIElement":              False,
+            "LSUIElement":              True,
         },
     )
