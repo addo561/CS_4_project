@@ -29,7 +29,7 @@ if _DIR not in sys.path:
     sys.path.insert(0, _DIR)
 
 from core.pipeline import Pipeline, PipelineResult
-from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC, VERSION
+from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC, VERSION, BASE_DIR
 
 # Background process scanner - prevents UI freezing
 _process_cache = {
@@ -1983,7 +1983,7 @@ def run_app(page: ft.Page) -> None:
     else:
         icon_ext = "png"
 
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", f"icon.{icon_ext}")
+    icon_path = os.path.join(BASE_DIR, "assets", f"icon.{icon_ext}")
     if os.path.exists(icon_path):
         page.window.icon = icon_path
 
@@ -2397,7 +2397,7 @@ if __name__ == "__main__":
 
             def _patch_flet_app_macos_main() -> None:
                 flet_glob = _os.path.expanduser(
-                    "~/.flet/client/flet-desktop-full-*/Flet.app/Contents"
+                    "~/.flet/client/flet-desktop-*/Flet.app/Contents"
                 )
                 matches = sorted(_glob.glob(flet_glob), reverse=True)
                 if not matches:

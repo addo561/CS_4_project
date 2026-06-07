@@ -24,7 +24,7 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 if _DIR not in sys.path:
     sys.path.insert(0, _DIR)
 
-from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC, VERSION, PROFILES, IPC_PORT
+from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC, VERSION, PROFILES, IPC_PORT, BASE_DIR
 
 # ── Design tokens ─────────────────────────────────────────────────────────────
 BG = "#0D1117"
@@ -1785,7 +1785,7 @@ def run_app(page: ft.Page) -> None:
     else:
         icon_ext = "png"
 
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", f"icon.{icon_ext}")
+    icon_path = os.path.join(BASE_DIR, "assets", f"icon.{icon_ext}")
     if os.path.exists(icon_path):
         page.window.icon = icon_path
 
@@ -2189,9 +2189,9 @@ def _patch_flet_app_macos() -> None:
     import plistlib
     import shutil
 
-    # Find whichever flet-desktop-full version is installed
+    # Find whichever flet-desktop version is installed (matches both full and light flavors)
     flet_glob = os.path.expanduser(
-        "~/.flet/client/flet-desktop-full-*/Flet.app/Contents"
+        "~/.flet/client/flet-desktop-*/Flet.app/Contents"
     )
     matches = sorted(glob.glob(flet_glob), reverse=True)  # newest first
     if not matches:
