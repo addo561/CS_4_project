@@ -216,11 +216,17 @@ if platform.system() == 'Darwin':
             "CFBundleDisplayName":      "System Resource Optimizer",
             "CFBundleVersion":          APP_VERSION,
             "CFBundleShortVersionString": APP_VERSION,
+            # Registers our bundle as the principal macOS GUI application.
+            # Without this the Flet Flutter renderer subprocess "wins" the
+            # Dock slot and shows the Flet logo instead of ours.
+            "NSPrincipalClass":         "NSApplication",
+            "CFBundleIconFile":         "icon.icns",
             "NSHighResolutionCapable":  True,
             "NSHumanReadableCopyright": "© 2026 KNUST Group 4",
             "LSMinimumSystemVersion":   "10.14",
-            "NSRequiresAquaSystemAppearance": False,   # supports dark mode
+            "NSRequiresAquaSystemAppearance": False,
             "LSBackgroundOnly":         False,
-            "LSUIElement":              True,
+            # Do NOT set LSUIElement here — that would hide us from the
+            # Dock and let the Flet subprocess take over the icon slot.
         },
     )

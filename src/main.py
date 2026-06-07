@@ -2376,11 +2376,20 @@ def main(page: ft.Page) -> None:
 
 if __name__ == "__main__":
     try:
-        # Resolve assets directory so Flet renderer uses our icon.png
-        # instead of the default Flet logo in the taskbar / Dock.
+        # ── Windows: set AppUserModelID BEFORE ft.run() creates any window ──
+        import sys as _sys
+        if _sys.platform == "win32":
+            import ctypes as _ct
+            try:
+                _ct.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "addo561.sro.systemresourceoptimizer.v2"
+                )
+            except Exception:
+                pass
+
         import os as _os
         _assets = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "assets")
         ft.run(main, assets_dir=_assets)
     except Exception as e:
         print(f"❌ Flet runtime error: {e}", flush=True)
-        sys.exit(1)
+        _sys.exit(1)
