@@ -86,7 +86,7 @@ class ActionEngine:
         self._suspended: dict[int, SuspendedProcess] = {}   # pid → record
         self._auto_resume_thread: Optional[threading.Thread] = None
         self._stop_event       = threading.Event()
-        self._start_auto_resume_watchdog()
+        self.start()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -213,9 +213,22 @@ class ActionEngine:
         with self._lock:
             return list(self._suspended.values())
 
+    def start(self):
+        """Start/restart the watchdog thread if not running."""
+        with self._lock:
+            self._stop_event.clear()
+            if not self._auto_resume_thread or not self._auto_resume_thread.is_alive():
+                self._start_auto_resume_watchdog()
+
     def shutdown(self):
         """Stop the watchdog thread; resume all suspended processes."""
         self._stop_event.set()
+        if self._auto_resume_thread:
+            try:
+                self._auto_resume_thread.join(timeout=2.0)
+            except Exception:
+                pass
+            self._auto_resume_thread = None
         self.undo()
 
     # ── Internal helpers ────────────────────────────────────────────────────

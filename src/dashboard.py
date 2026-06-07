@@ -2048,61 +2048,70 @@ def run_app(page: ft.Page) -> None:
             # Connected - poll updates
             resp = client.send_request({"type": "get_update"})
             if resp.get("connected"):
-                latest = resp.get("latest_result")
-                if latest:
-                    f = latest.get("features", {})
-                    cpu = f.get("cpu_percent_raw", f.get("cpu_percent", 0))
-                    mem = f.get("mem_percent_raw", f.get("mem_percent", 0))
-                    tmp = f.get("cpu_temp_c", 0)
-                    swap = f.get("swap_percent", 0)
-                    
-                    ui.metrics[0].update(cpu)
-                    ui.metrics[1].update(mem)
-                    ui.metrics[2].update(tmp if tmp > 0 else 0)
-                    ui.metrics[3].update(swap)
-                    
-                    ui.charts[0].push(cpu, redraw=True)
-                    ui.charts[1].push(mem, redraw=True)
-                    if tmp > 0:
-                        ui.charts[2].push(tmp, redraw=True)
+                optimizer_active = resp.get("optimizer_active", True)
+                if not optimizer_active:
+                    ui.gauge_ring.value = 0.0
+                    ui.gauge_ring.color = MUTED
+                    ui.gauge_value.value = "OFF"
+                    ui.gauge_value.color = MUTED
+                    ui.gauge_insight.value = "Optimizer engine suspended by user"
+                    ui.gauge_insight.color = MUTED
+                else:
+                    latest = resp.get("latest_result")
+                    if latest:
+                        f = latest.get("features", {})
+                        cpu = f.get("cpu_percent_raw", f.get("cpu_percent", 0))
+                        mem = f.get("mem_percent_raw", f.get("mem_percent", 0))
+                        tmp = f.get("cpu_temp_c", 0)
+                        swap = f.get("swap_percent", 0)
                         
-                    _update_analytics_dict(ui, latest)
+                        ui.metrics[0].update(cpu)
+                        ui.metrics[1].update(mem)
+                        ui.metrics[2].update(tmp if tmp > 0 else 0)
+                        ui.metrics[3].update(swap)
+                        
+                        ui.charts[0].push(cpu, redraw=True)
+                        ui.charts[1].push(mem, redraw=True)
+                        if tmp > 0:
+                            ui.charts[2].push(tmp, redraw=True)
+                            
+                        _update_analytics_dict(ui, latest)
 
-                    if not resp.get("optimizer_active", True):
+                        if latest.get("calibrating"):
+                            cal_prog = resp.get("calib_progress", (0, CALIBRATION_SECONDS))
+                            elapsed, total = cal_prog
+                            if elapsed != -1:
+                                pct = min(100, max(1, int((elapsed / total) * 100)))
+                                ui.gauge_insight.value = f"Calibrating telemetry ({pct}%)..."
+                                ui.gauge_insight.color = WARN
+                                ui.gauge_ring.value = elapsed / total
+                                ui.gauge_ring.color = WARN
+                                ui.gauge_value.value = f"{pct}%"
+                                ui.gauge_value.color = WARN
+                        else:
+                            conf = latest.get("confidence", 0.0)
+                            pct = int(conf * 100)
+                            col = severity(pct)
+                            ui.gauge_ring.value = conf
+                            ui.gauge_ring.color = col
+                            ui.gauge_value.value = f"{pct}%"
+                            ui.gauge_value.color = col
+                            if pct >= 80:
+                                ui.gauge_insight.value = f"High load risk · CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
+                                ui.gauge_insight.color = CRIT
+                            elif pct >= 55:
+                                ui.gauge_insight.value = f"Moderate risk · CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
+                                ui.gauge_insight.color = WARN
+                            else:
+                                ui.gauge_insight.value = "System healthy"
+                                ui.gauge_insight.color = ACCENT
+                    else:
                         ui.gauge_ring.value = 0.0
                         ui.gauge_ring.color = MUTED
-                        ui.gauge_value.value = "OFF"
+                        ui.gauge_value.value = "..."
                         ui.gauge_value.color = MUTED
-                        ui.gauge_insight.value = "Optimizer engine suspended by user"
+                        ui.gauge_insight.value = "Initializing telemetry..."
                         ui.gauge_insight.color = MUTED
-                    elif latest.get("calibrating"):
-                        cal_prog = resp.get("calib_progress", (0, CALIBRATION_SECONDS))
-                        elapsed, total = cal_prog
-                        if elapsed != -1:
-                            pct = min(100, max(1, int((elapsed / total) * 100)))
-                            ui.gauge_insight.value = f"Calibrating telemetry ({pct}%)..."
-                            ui.gauge_insight.color = WARN
-                            ui.gauge_ring.value = elapsed / total
-                            ui.gauge_ring.color = WARN
-                            ui.gauge_value.value = f"{pct}%"
-                            ui.gauge_value.color = WARN
-                    else:
-                        conf = latest.get("confidence", 0.0)
-                        pct = int(conf * 100)
-                        col = severity(pct)
-                        ui.gauge_ring.value = conf
-                        ui.gauge_ring.color = col
-                        ui.gauge_value.value = f"{pct}%"
-                        ui.gauge_value.color = col
-                        if pct >= 80:
-                            ui.gauge_insight.value = f"High load risk · CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
-                            ui.gauge_insight.color = CRIT
-                        elif pct >= 55:
-                            ui.gauge_insight.value = f"Moderate risk · CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
-                            ui.gauge_insight.color = WARN
-                        else:
-                            ui.gauge_insight.value = "System healthy"
-                            ui.gauge_insight.color = ACCENT
 
                 # Suspended table
                 suspended = resp.get("suspended_processes", [])

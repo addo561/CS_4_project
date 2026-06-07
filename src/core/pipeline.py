@@ -423,6 +423,11 @@ class Pipeline:
             log.warning("Pipeline already running.")
             return
         self._stop_event.clear()
+        
+        # Restart ActionEngine's watchdog thread
+        if hasattr(self._action, "start"):
+            self._action.start()
+
         self._thread = threading.Thread(
             target = self._run,
             name   = "PipelineThread",
