@@ -1773,10 +1773,22 @@ def run_app(page: ft.Page) -> None:
 
     # Set taskbar/window icon
     import platform
-    icon_ext = "icns" if platform.system() == "Darwin" else "png"
+    if platform.system() == "Windows":
+        icon_ext = "ico"
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("addo561.sro.systemresourceoptimizer.v2")
+        except Exception:
+            pass
+    elif platform.system() == "Darwin":
+        icon_ext = "icns"
+    else:
+        icon_ext = "png"
+
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", f"icon.{icon_ext}")
     if os.path.exists(icon_path):
         page.window.icon = icon_path
+
 
     # IPC Client action triggers
     ui_callbacks = {
@@ -2138,6 +2150,18 @@ def run_app(page: ft.Page) -> None:
             except Exception:
                 pass
             await asyncio.sleep(0.5)
+
+    # ── Window close handler: stop polling loop when user closes window ─────
+    def on_window_event(e):
+        if e.data == "close" or e.data == "destroy":
+            page.user_shutdown_requested = True
+            client.connected = False
+            try:
+                client._sock and client._sock.close()
+            except Exception:
+                pass
+
+    page.window.on_event = on_window_event
 
     page.run_task(poll_service_worker)
     ui.sync_charts()

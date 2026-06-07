@@ -246,10 +246,11 @@ class ActionEngine:
             if uids and hasattr(uids, "real") and uids.real == 0:  # Root/SYSTEM
                 return True
             
-            # Check if parent is system init using pre-fetched ppid (100x faster, no process instantiation)
+            # Check if parent is system init — PID 1 is launchd/systemd on macOS/Linux only.
+            # On Windows there is no PID 1; system processes live under PID 4 (System).
             try:
                 ppid = (proc.info.get("ppid") if hasattr(proc, "info") and proc.info else None) or proc.ppid()
-                if ppid == 1:
+                if ppid == 1 and sys.platform != "win32":
                     return True
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
@@ -318,6 +319,9 @@ class ActionEngine:
 
             if username.lower() in ("root", "system", "local service",
                                     "network service", "_windowserver", "_spotlight"):
+                return False
+            # Windows: skip NT AUTHORITY accounts (e.g. 'nt authority\\system', 'nt authority\\network service')
+            if sys.platform == "win32" and ("nt authority" in username.lower() or username.lower().endswith("\\system")):
                 return False
 
             # Skip already-suspended/mitigated processes
