@@ -36,17 +36,21 @@ def _send_macos(title: str, message: str):
     
     # Check if running from packaged bundle
     if getattr(sys, "frozen", False):
-        script = (
-            f'try\n'
-            f'    if application id "com.knust.group4.systemresourceoptimizer" is running then\n'
-            f'        tell application id "com.knust.group4.systemresourceoptimizer" to display notification "{message}" with title "{title}"\n'
-            f'    else\n'
-            f'        display notification "{message}" with title "{title}"\n'
-            f'    end if\n'
-            f'on error\n'
-            f'    display notification "{message}" with title "{title}"\n'
-            f'end try'
-        )
+        # Check if the GUI app process is active in Python to avoid LaunchServices lookup hangs
+        gui_running = False
+        try:
+            import psutil
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'] == 'SystemResourceOptimizer':
+                    gui_running = True
+                    break
+        except Exception:
+            pass
+            
+        if gui_running:
+            script = f'tell application id "com.knust.group4.systemresourceoptimizer" to display notification "{message}" with title "{title}"'
+        else:
+            script = f'display notification "{message}" with title "{title}"'
     else:
         # Avoid tell block to prevent macOS from prompting "Choose Application" dialog
         script = f'display notification "{message}" with title "{title}"'
