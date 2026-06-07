@@ -2376,8 +2376,49 @@ def main(page: ft.Page) -> None:
 
 if __name__ == "__main__":
     try:
-        # ── Windows: set AppUserModelID BEFORE ft.run() creates any window ──
         import sys as _sys
+        import os as _os
+
+        # ── macOS: hide Flet.app from Dock, replace its icon with ours ───
+        if _sys.platform == "darwin":
+            # Import the same patch function from dashboard.py's module context
+            import glob as _glob
+            import plistlib as _pl
+            import shutil as _sh
+
+            def _patch_flet_app_macos_main() -> None:
+                flet_glob = _os.path.expanduser(
+                    "~/.flet/client/flet-desktop-full-*/Flet.app/Contents"
+                )
+                matches = sorted(_glob.glob(flet_glob), reverse=True)
+                if not matches:
+                    return
+                contents_dir = matches[0]
+                plist_path   = _os.path.join(contents_dir, "Info.plist")
+                res_dir      = _os.path.join(contents_dir, "Resources")
+                try:
+                    with open(plist_path, "rb") as fh:
+                        plist = _pl.load(fh)
+                    if not plist.get("LSUIElement"):
+                        plist["LSUIElement"] = True
+                        with open(plist_path, "wb") as fh:
+                            _pl.dump(plist, fh)
+                except Exception as exc:
+                    print(f"[icon-patch] plist skipped: {exc}", flush=True)
+                try:
+                    our_icns = _os.path.join(
+                        _os.path.dirname(_os.path.abspath(__file__)),
+                        "assets", "icon.icns"
+                    )
+                    if _os.path.exists(our_icns):
+                        for name in ("AppIcon.icns", "AppIcon"):
+                            _sh.copy2(our_icns, _os.path.join(res_dir, name))
+                except Exception as exc:
+                    print(f"[icon-patch] icon skipped: {exc}", flush=True)
+
+            _patch_flet_app_macos_main()
+
+        # ── Windows: set AppUserModelID BEFORE ft.run() creates any window
         if _sys.platform == "win32":
             import ctypes as _ct
             try:
@@ -2387,7 +2428,6 @@ if __name__ == "__main__":
             except Exception:
                 pass
 
-        import os as _os
         _assets = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "assets")
         ft.run(main, assets_dir=_assets)
     except Exception as e:

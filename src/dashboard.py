@@ -2172,12 +2172,67 @@ def main(page: ft.Page) -> None:
     run_app(page)
 
 
+def _patch_flet_app_macos() -> None:
+    """
+    Hides the Flet renderer subprocess from the macOS Dock so only our
+    app's custom icon appears.  Done by injecting LSUIElement=True into
+    Flet.app/Contents/Info.plist and replacing its AppIcon with ours —
+    both changes survive a re-open of the same Flet client version.
+    """
+    import glob
+    import os
+    import plistlib
+    import shutil
+
+    # Find whichever flet-desktop-full version is installed
+    flet_glob = os.path.expanduser(
+        "~/.flet/client/flet-desktop-full-*/Flet.app/Contents"
+    )
+    matches = sorted(glob.glob(flet_glob), reverse=True)  # newest first
+    if not matches:
+        return
+
+    contents_dir = matches[0]
+    plist_path   = os.path.join(contents_dir, "Info.plist")
+    res_dir      = os.path.join(contents_dir, "Resources")
+
+    # ── 1. Patch Info.plist to add LSUIElement so Flet.app is Dock-less ──
+    try:
+        with open(plist_path, "rb") as fh:
+            plist = plistlib.load(fh)
+
+        if not plist.get("LSUIElement"):          # only write if needed
+            plist["LSUIElement"] = True
+            with open(plist_path, "wb") as fh:
+                plistlib.dump(plist, fh)
+    except Exception as exc:
+        print(f"[icon-patch] plist update skipped: {exc}", flush=True)
+
+    # ── 2. Replace Flet.app's AppIcon.icns with our icon ────────────────
+    try:
+        our_icns = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "icon.icns"
+        )
+        if os.path.exists(our_icns):
+            for name in ("AppIcon.icns", "AppIcon"):
+                dest = os.path.join(res_dir, name)
+                shutil.copy2(our_icns, dest)
+    except Exception as exc:
+        print(f"[icon-patch] icon replace skipped: {exc}", flush=True)
+
+
 if __name__ == "__main__":
     try:
-        # ── Windows: set AppUserModelID BEFORE ft.run() creates any window ──
+        import sys as _sys
+        import os as _os
+
+        # ── macOS: hide Flet.app from Dock and give it our icon ──────────
+        if _sys.platform == "darwin":
+            _patch_flet_app_macos()
+
+        # ── Windows: set AppUserModelID BEFORE ft.run() creates any window
         # This must happen first so Windows taskbar groups our button under
         # our .ico icon, not the default Flet / Python icon.
-        import sys as _sys
         if _sys.platform == "win32":
             import ctypes as _ct
             try:
@@ -2187,8 +2242,7 @@ if __name__ == "__main__":
             except Exception:
                 pass
 
-        # Resolve assets directory so Flet renderer uses our icon.png
-        import os as _os
+        # Resolve assets dir so Flet renderer picks up our icon.png
         _assets = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "assets")
         ft.run(main, assets_dir=_assets)
     except Exception as e:
