@@ -1970,8 +1970,7 @@ def run_app(page: ft.Page) -> None:
         service_start_attempted = False
         while True:
             if getattr(page, "user_shutdown_requested", False):
-                await asyncio.sleep(1.0)
-                continue
+                break  # Exit loop entirely — do NOT continue spinning
 
             if not client.connected:
                 # Show overlay immediately
@@ -2151,17 +2150,28 @@ def run_app(page: ft.Page) -> None:
                 pass
             await asyncio.sleep(0.5)
 
-    # ── Window close handler: stop polling loop when user closes window ─────
+    # ── Disconnect handler: fires reliably when window is closed ────────────
+    # page.on_disconnect is more reliable than window.on_event("close")
+    # because it fires when the Flet WebSocket connection drops, which
+    # happens immediately when the window is destroyed.
+    def on_disconnect(_):
+        page.user_shutdown_requested = True
+        client.connected = False
+        try:
+            if hasattr(client, "_sock") and client._sock:
+                client._sock.close()
+        except Exception:
+            pass
+
+    page.on_disconnect = on_disconnect
+
+    # Also hook window events as a secondary safety net
     def on_window_event(e):
-        if e.data == "close" or e.data == "destroy":
-            page.user_shutdown_requested = True
-            client.connected = False
-            try:
-                client._sock and client._sock.close()
-            except Exception:
-                pass
+        if e.data in ("close", "destroy"):
+            on_disconnect(None)
 
     page.window.on_event = on_window_event
+    page.window.prevent_close = False  # ensure close events fire normally
 
     page.run_task(poll_service_worker)
     ui.sync_charts()
