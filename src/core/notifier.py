@@ -29,31 +29,12 @@ if _OS == "Windows":
 from config import BASE_DIR
 
 def _send_macos(title: str, message: str):
-    """Use macOS built-in osascript. If packaged, attrib to app logo; if not, notify directly to bypass file dialog prompts."""
+    """Use macOS built-in osascript to display notifications instantly."""
     # Escape quotes to avoid breaking the AppleScript string
     title   = title.replace('"', '\\"').replace("'", "\\'")
     message = message.replace('"', '\\"').replace("'", "\\'")
     
-    # Check if running from packaged bundle
-    if getattr(sys, "frozen", False):
-        # Check if the GUI app process is active in Python to avoid LaunchServices lookup hangs
-        gui_running = False
-        try:
-            import psutil
-            for proc in psutil.process_iter(['name']):
-                if proc.info['name'] == 'SystemResourceOptimizer':
-                    gui_running = True
-                    break
-        except Exception:
-            pass
-            
-        if gui_running:
-            script = f'tell application id "com.knust.group4.systemresourceoptimizer" to display notification "{message}" with title "{title}"'
-        else:
-            script = f'display notification "{message}" with title "{title}"'
-    else:
-        # Avoid tell block to prevent macOS from prompting "Choose Application" dialog
-        script = f'display notification "{message}" with title "{title}"'
+    script = f'display notification "{message}" with title "{title}"'
         
     subprocess.Popen(
         ["osascript", "-e", script],

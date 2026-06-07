@@ -98,12 +98,20 @@ The simulator implements a **First-Order Lag Filter (Exponential Smoothing)** th
 
 1. **Target Temperature Calculation ($T_{\text{target}}$)**:
    The baseline temperature is anchored at an idle average of $38.0^\circ\text{C}$. The target temperature adjusts dynamically based on instantaneous CPU utilization ($U_{\text{cpu}}$) and Memory usage ($U_{\text{mem}}$):
-   $$T_{\text{target}} = 38.0 + (U_{\text{cpu}} \times 0.45) + (U_{\text{mem}} \times 0.1)$$
+
+$$
+T_{\text{target}} = 38.0 + (U_{\text{cpu}} \times 0.45) + (U_{\text{mem}} \times 0.1)
+$$
+
    *For example, if your CPU is at 100% load and memory is at 80% load, the target temperature rises to $38.0 + 45.0 + 8.0 = 91.0^\circ\text{C}$.*
 
 2. **Temporal Heat Soak & Smoothing ($T_{t+1}$)**:
    Physical heat does not jump instantly. To simulate thermal resistance and heat soaking, the current simulated temperature $T_t$ transitions toward $T_{\text{target}}$ by $10\%$ on each 1Hz update cycle:
-   $$T_{t+1} = T_t + (T_{\text{target}} - T_t) \times 0.1$$
+
+$$
+T_{t+1} = T_t + (T_{\text{target}} - T_t) \times 0.1
+$$
+
    This produces a highly realistic, smooth rolling curve on the Flet Canvas charts that mirrors physical CPU heat-up and cooldown delay curves.
 
 ---
