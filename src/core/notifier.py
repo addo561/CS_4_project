@@ -38,7 +38,11 @@ def _send_macos(title: str, message: str):
     if getattr(sys, "frozen", False):
         script = (
             f'try\n'
-            f'    tell application id "com.knust.group4.systemresourceoptimizer" to display notification "{message}" with title "{title}"\n'
+            f'    if application id "com.knust.group4.systemresourceoptimizer" is running then\n'
+            f'        tell application id "com.knust.group4.systemresourceoptimizer" to display notification "{message}" with title "{title}"\n'
+            f'    else\n'
+            f'        display notification "{message}" with title "{title}"\n'
+            f'    end if\n'
             f'on error\n'
             f'    display notification "{message}" with title "{title}"\n'
             f'end try'

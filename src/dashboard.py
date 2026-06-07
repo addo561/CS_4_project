@@ -2156,10 +2156,6 @@ def run_app(page: ft.Page) -> None:
     # happens immediately when the window is destroyed.
     def on_disconnect(_):
         page.user_shutdown_requested = True
-        try:
-            client.send_request({"type": "command", "cmd": "shutdown"})
-        except Exception:
-            pass
         client.close()
 
     page.on_disconnect = on_disconnect
