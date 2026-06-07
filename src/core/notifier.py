@@ -104,6 +104,18 @@ class Notifier:
             name="NotifyThread",
         ).start()
 
+    def send_sync(self, title: str, message: str, timeout: int = 6):
+        """Fire notification synchronously to ensure it delivers before process exit."""
+        if self.on_notify:
+            try:
+                self.on_notify(title, message)
+            except Exception:
+                pass
+        try:
+            self._fire(title, message, timeout)
+        except Exception:
+            pass
+
     def _fire(self, title: str, message: str, timeout: int):
         try:
             if _OS == "Darwin":

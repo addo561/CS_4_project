@@ -352,8 +352,8 @@ class OptimizerService:
                 
             elif cmd == "shutdown":
                 self.add_log("Service shutdown command received", WARN)
-                # Terminate service asynchronously
-                threading.Thread(target=self.shutdown, daemon=True).start()
+                # Signal main loop to stop, which will run shutdown on the main thread
+                self.stop_event.set()
                 return {"status": "ok", "message": "Service is shutting down"}
                 
         return {"status": "error", "message": "Unknown request type"}
@@ -406,11 +406,11 @@ class OptimizerService:
         if self.pipeline:
             if hasattr(self.pipeline, "_notifier") and self.pipeline._notifier:
                 try:
-                    self.pipeline._notifier.send(
+                    self.pipeline._notifier.send_sync(
                         title="⚡ SRO: Optimizer Suspended",
                         message="Background optimizer has been suspended. All processes resumed."
                     )
-                    time.sleep(0.5)  # Let the async notification spawn
+                    time.sleep(1.0)  # Wait for subprocess/notification engine to launch
                 except Exception as e:
                     log.error(f"Failed to send shutdown notification: {e}")
             self.pipeline.stop()
