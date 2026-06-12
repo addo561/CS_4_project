@@ -1268,7 +1268,7 @@ def build_settings_view(autopilot_status: ft.Text, page: Optional[ft.Page] = Non
         on_submit=add_proc,
     )
 
-    add_button = ft.ElevatedButton(
+    add_button = ft.FilledButton(
         content=body_text("Add", size=12, weight=ft.FontWeight.BOLD, color=BG),
         style=ft.ButtonStyle(
             bgcolor=ACCENT,

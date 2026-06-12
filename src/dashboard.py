@@ -1083,7 +1083,7 @@ def build_settings_view(autopilot_status: ft.Text, page: ft.Page) -> ft.Column:
         on_submit=add_proc,
     )
 
-    add_button = ft.ElevatedButton(
+    add_button = ft.FilledButton(
         content=body_text("Add", size=12, weight=ft.FontWeight.BOLD, color=BG),
         style=ft.ButtonStyle(
             bgcolor=ACCENT,
@@ -1118,7 +1118,7 @@ def build_settings_view(autopilot_status: ft.Text, page: ft.Page) -> ft.Column:
             page.snack_bar.open = True
             page.update()
 
-    shutdown_btn = ft.ElevatedButton(
+    shutdown_btn = ft.FilledButton(
         content=body_text("Stop Background Service", size=12, weight=ft.FontWeight.BOLD, color=TEXT),
         style=ft.ButtonStyle(
             bgcolor=CRIT,
