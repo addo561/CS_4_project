@@ -126,19 +126,47 @@ def _collect_sample(label: str) -> dict:
     timestamp = datetime.utcnow().isoformat(timespec="milliseconds")
 
     # ── CPU ───────────────────────────────────────────────────────────────────
-    cpu_pct     = psutil.cpu_percent(interval=None)          # non-blocking (needs prior call)
-    per_core    = psutil.cpu_percent(interval=None, percpu=True)
-    freq_info   = psutil.cpu_freq()
+    try:
+        cpu_pct = psutil.cpu_percent(interval=None)          # non-blocking (needs prior call)
+    except Exception as exc:
+        log.warning("Could not read CPU percent; using 0.0%%: %s", exc)
+        cpu_pct = 0.0
+    try:
+        per_core = psutil.cpu_percent(interval=None, percpu=True)
+    except Exception as exc:
+        log.warning("Could not read per-core CPU percent: %s", exc)
+        per_core = []
+    try:
+        freq_info = psutil.cpu_freq()
+    except Exception as exc:
+        log.warning("Could not read CPU frequency; using 0.0 MHz: %s", exc)
+        freq_info = None
     cpu_freq    = round(freq_info.current, 1) if freq_info else 0.0
 
     # ── Memory ───────────────────────────────────────────────────────────────
-    mem         = psutil.virtual_memory()
-    swap        = psutil.swap_memory()
+    try:
+        mem = psutil.virtual_memory()
+        mem_used_mb = round(mem.used / 1_048_576, 2)
+        mem_available_mb = round(mem.available / 1_048_576, 2)
+        mem_percent = float(mem.percent)
+    except Exception as exc:
+        log.warning("Could not read memory stats; using zeros: %s", exc)
+        mem_used_mb = 0.0
+        mem_available_mb = 0.0
+        mem_percent = 0.0
+    try:
+        swap = psutil.swap_memory()
+        swap_used_mb = round(swap.used / 1_048_576, 2)
+        swap_percent = round(swap.percent, 2)
+    except Exception as exc:
+        log.warning("Could not read swap stats; using zeros: %s", exc)
+        swap_used_mb = 0.0
+        swap_percent = 0.0
 
     # ── Temperature ──────────────────────────────────────────────────────────
     real_temp   = _get_cpu_temp()
     if real_temp == TEMP_FALLBACK:
-        cpu_temp = _thermal_sim.get_simulated_temp(cpu_pct, mem.percent)
+        cpu_temp = _thermal_sim.get_simulated_temp(cpu_pct, mem_percent)
     else:
         cpu_temp = real_temp
 
@@ -148,11 +176,11 @@ def _collect_sample(label: str) -> dict:
         "label":            label,
         "cpu_percent":      round(cpu_pct, 2),
         "cpu_freq_mhz":     cpu_freq,
-        "mem_used_mb":      round(mem.used / 1_048_576, 2),
-        "mem_available_mb": round(mem.available / 1_048_576, 2),
-        "mem_percent":      round(mem.percent, 2),
-        "swap_used_mb":     round(swap.used / 1_048_576, 2),
-        "swap_percent":     round(swap.percent, 2),
+        "mem_used_mb":      mem_used_mb,
+        "mem_available_mb": mem_available_mb,
+        "mem_percent":      round(mem_percent, 2),
+        "swap_used_mb":     swap_used_mb,
+        "swap_percent":     swap_percent,
         "cpu_temp_c":       cpu_temp,
     }
 

@@ -319,20 +319,18 @@ class OptimizerService:
                         if not self.pipeline._thread or not self.pipeline._thread.is_alive():
                             self.pipeline.start()
                             self.add_log("Optimizer engine resumed", ACCENT)
-                            # if self.pipeline._notifier:
-                            #     self.pipeline._notifier.send(
-                            #         title="⚡ SRO: Optimizer Resumed",
-                            #         message="Background optimizer loop has been resumed."
-                            #     )
+                            self.queue_notification(
+                                title="⚡ SRO: Optimizer Resumed",
+                                message="Background optimizer loop has been resumed."
+                            )
                     return {"status": "ok", "optimizer_active": True}
                 else:
                     if self.pipeline:
                         if self.pipeline._thread and self.pipeline._thread.is_alive():
-                            # if self.pipeline._notifier:
-                            #     self.pipeline._notifier.send(
-                            #         title="⚡ SRO: Optimizer Suspended",
-                            #         message="Background optimizer loop has been suspended. All processes resumed."
-                            #     )
+                            self.queue_notification(
+                                title="⚡ SRO: Optimizer Suspended",
+                                message="Background optimizer loop has been suspended. All processes resumed."
+                            )
                             self.pipeline.stop()
                             self.add_log("Optimizer engine suspended", MUTED)
                     return {"status": "ok", "optimizer_active": False}
@@ -404,39 +402,65 @@ class OptimizerService:
         self.start_ipc_server()
         
         # Main service loop
-        while not self.stop_event.is_set():
-            try:
-                time.sleep(1)
-            except KeyboardInterrupt:
-                break
-                
-        self.shutdown()
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    time.sleep(1)
+                except KeyboardInterrupt:
+                    log.info("Received KeyboardInterrupt signal")
+                    break
+        except Exception as e:
+            log.error(f"Error in main service loop: {e}")
+        finally:
+            self.shutdown()
 
     def shutdown(self) -> None:
         log.info("Shutting down background service...")
         self.stop_event.set()
         
-        # Close socket
+        # Stop pipeline first (this will handle process resumption)
+        if self.pipeline:
+            try:
+                if hasattr(self.pipeline, "_notifier") and self.pipeline._notifier:
+                    try:
+                        self.pipeline._notifier.send_sync(
+                            title="⚡ SRO: Optimizer Suspended",
+                            message="Background optimizer has been suspended. All processes resumed."
+                        )
+                        time.sleep(0.5)  # Wait for subprocess/notification engine to launch
+                    except Exception as e:
+                        log.error(f"Failed to send shutdown notification: {e}")
+                
+                # Stop pipeline and wait for threads to finish
+                self.pipeline.stop()
+                time.sleep(0.3)  # Brief wait for pipeline cleanup
+            except Exception as e:
+                log.error(f"Error stopping pipeline: {e}")
+            finally:
+                self.pipeline = None
+        
+        # Wait for scanner thread to finish
+        if self.scanner_thread and self.scanner_thread.is_alive():
+            try:
+                self.scanner_thread.join(timeout=2.0)
+            except Exception as e:
+                log.error(f"Error joining scanner thread: {e}")
+        
+        # Close server socket
         if self.server_socket:
             try:
+                self.server_socket.shutdown(socket.SHUT_RDWR)
                 self.server_socket.close()
             except Exception:
                 pass
-                
-        # Stop pipeline
-        if self.pipeline:
-            if hasattr(self.pipeline, "_notifier") and self.pipeline._notifier:
-                try:
-                    self.pipeline._notifier.send_sync(
-                        title="⚡ SRO: Optimizer Suspended",
-                        message="Background optimizer has been suspended. All processes resumed."
-                    )
-                    time.sleep(1.0)  # Wait for subprocess/notification engine to launch
-                except Exception as e:
-                    log.error(f"Failed to send shutdown notification: {e}")
-            self.pipeline.stop()
-            self.pipeline = None
-            
+        
+        # Wait for server thread to finish
+        if self.server_thread and self.server_thread.is_alive():
+            try:
+                self.server_thread.join(timeout=2.0)
+            except Exception as e:
+                log.error(f"Error joining server thread: {e}")
+        
         log.info("Background service terminated cleanly.")
         sys.exit(0)
 

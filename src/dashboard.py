@@ -1996,9 +1996,9 @@ def run_app(page: ft.Page) -> None:
                 if os.path.exists(script_path):
                     if sys.platform == "win32":
                         pyw = sys.executable.replace("python.exe", "pythonw.exe")
-                        subprocess.Popen([pyw, script_path], creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0)
+                        subprocess.Popen([pyw, script_path], creationflags=subprocess.CREATE_NO_WINDOW | 0x00000008 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0x00000008)
                     else:
-                        subprocess.Popen([sys.executable, script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.Popen([sys.executable, script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         except Exception as e:
             print(f"Error launching background service: {e}", flush=True)
 
@@ -2030,7 +2030,7 @@ def run_app(page: ft.Page) -> None:
                         pass
                         
                     if client.connect():
-                        log_resp = client.send_request({"type": "get_full_state"})
+                        log_resp = await asyncio.to_thread(client.send_request, {"type": "get_full_state"})
                         if log_resp.get("connected"):
                             # Process pending notifications from the background daemon
                             for notif in log_resp.get("pending_notifications", []):
@@ -2092,7 +2092,7 @@ def run_app(page: ft.Page) -> None:
                         continue
 
                 # Connected - poll updates
-                resp = client.send_request({"type": "get_update"})
+                resp = await asyncio.to_thread(client.send_request, {"type": "get_update"})
                 if resp.get("connected"):
                     # Process pending notifications from the background daemon
                     for notif in resp.get("pending_notifications", []):
@@ -2165,40 +2165,40 @@ def run_app(page: ft.Page) -> None:
                             ui.gauge_insight.value = "Initializing telemetry..."
                             ui.gauge_insight.color = MUTED
 
-                # Suspended table
-                suspended = resp.get("suspended_processes", [])
-                rows = []
-                for i, sp in enumerate(suspended):
-                    rows.append(
-                        ft.DataRow(
-                            color=CARD_ALT if i % 2 else None,
-                            cells=[
-                                ft.DataCell(ft.Container(content=body_text(sp["name"], size=11), width=140)),
-                                ft.DataCell(ft.Container(content=body_text(time.strftime("%H:%M:%S", time.localtime(sp["suspended_at"])), size=11, color=MUTED), width=80)),
-                            ],
+                    # Suspended table
+                    suspended = resp.get("suspended_processes", [])
+                    rows = []
+                    for i, sp in enumerate(suspended):
+                        rows.append(
+                            ft.DataRow(
+                                color=CARD_ALT if i % 2 else None,
+                                cells=[
+                                    ft.DataCell(ft.Container(content=body_text(sp["name"], size=11), width=140)),
+                                    ft.DataCell(ft.Container(content=body_text(time.strftime("%H:%M:%S", time.localtime(sp["suspended_at"])), size=11, color=MUTED), width=80)),
+                                ],
+                            )
                         )
-                    )
-                ui.susp_table.rows = rows
-                ui.undo_btn.disabled = len(rows) == 0
+                    ui.susp_table.rows = rows
+                    ui.undo_btn.disabled = len(rows) == 0
 
-                # Top processes table
-                top_procs = resp.get("top_processes", [])
-                ui.proc_table.rows = proc_rows(top_procs)
+                    # Top processes table
+                    top_procs = resp.get("top_processes", [])
+                    ui.proc_table.rows = proc_rows(top_procs)
 
-                # Sync Autopilot
-                ui.autopilot.value = resp.get("autopilot_enabled", True)
-                ui.autopilot_status.value = f"Status: {'ON' if ui.autopilot.value else 'OFF'}"
-                ui.autopilot_status.color = ACCENT if ui.autopilot.value else MUTED
+                    # Sync Autopilot
+                    ui.autopilot.value = resp.get("autopilot_enabled", True)
+                    ui.autopilot_status.value = f"Status: {'ON' if ui.autopilot.value else 'OFF'}"
+                    ui.autopilot_status.color = ACCENT if ui.autopilot.value else MUTED
 
-                # Sync logs
-                ui.log_list.controls.clear()
-                for entry in resp.get("logs", []):
-                    ts = entry.get("time", "")
-                    msg = entry.get("message", "")
-                    color = entry.get("color", ACCENT)
-                    ui.log_list.controls.append(
-                        body_text(f"[{ts}] {msg}", size=11, color=color, font_family="monospace")
-                    )
+                    # Sync logs
+                    ui.log_list.controls.clear()
+                    for entry in resp.get("logs", []):
+                        ts = entry.get("time", "")
+                        msg = entry.get("message", "")
+                        color = entry.get("color", ACCENT)
+                        ui.log_list.controls.append(
+                            body_text(f"[{ts}] {msg}", size=11, color=color, font_family="monospace")
+                        )
 
                     overlay_host.visible = False
                 else:
@@ -2218,18 +2218,63 @@ def run_app(page: ft.Page) -> None:
     # because it fires when the Flet WebSocket connection drops, which
     # happens immediately when the window is destroyed.
     def on_disconnect(_):
-        page.user_shutdown_requested = True
-        client.close()
+        if not getattr(page, "user_shutdown_requested", False):
+            page.user_shutdown_requested = True
+        try:
+            client.close()
+        except Exception:
+            pass
 
     page.on_disconnect = on_disconnect
 
-    # Also hook window events as a secondary safety net
+    # Also hook window events to send notification BEFORE closing.
+    # IMPORTANT: closing the dashboard must NOT stop the background optimizer
+    # service — the service runs as a detached process and keeps optimizing.
     def on_window_event(e):
-        if e.data in ("close", "destroy"):
-            on_disconnect(None)
+        log.info(f"Window event received: {e.data}")
+        if e.data in ("close", "destroy", "quit", "exit", "window_close"):
+            if getattr(page, "_closing_in_progress", False):
+                return
+
+            page._closing_in_progress = True
+            page.user_shutdown_requested = True
+
+            # Close IPC client gracefully (this only drops our socket; it does
+            # NOT send a shutdown command, so the service stays alive).
+            try:
+                client.close()
+            except Exception:
+                pass
+
+            # Stop intercepting and actually tear the window down now so the
+            # UI disappears immediately instead of feeling "stuck".
+            try:
+                page.window.prevent_close = False
+                page.window.destroy()
+            except Exception:
+                pass
+
+            # Fire the "still running in background" notification and then force
+            # this process to exit. We MUST use os._exit() here: sys.exit() only
+            # raises SystemExit in the *calling* thread, so from this background
+            # thread it would leave the dashboard process (and window) alive —
+            # which was the root cause of the app not closing.
+            def finalize_exit():
+                try:
+                    notifier.send_sync(
+                        title="⚡ SRO Dashboard Closed",
+                        message="Optimizer service is still running in the background to keep your system fast.",
+                        timeout=1,
+                    )
+                except Exception as ex:
+                    log.warning(f"Failed to send close notification: {ex}")
+                time.sleep(0.15)  # let osascript/notification subprocess detach
+                os._exit(0)
+
+            threading.Thread(target=finalize_exit, daemon=True).start()
 
     page.window.on_event = on_window_event
-    page.window.prevent_close = False  # ensure close events fire normally
+    page.window.prevent_close = True  # Intercept close event to ensure notification fires
 
     page.run_task(poll_service_worker)
     ui.sync_charts()
@@ -2370,86 +2415,11 @@ def _set_windows_taskbar_icon_async() -> None:
     t.start()
 
 
-def _patch_flet_app_macos() -> None:
-    """
-    Hides the Flet renderer subprocess from the macOS Dock so only our
-    app's custom icon appears.  Done by injecting LSUIElement into
-    Flet.app/Contents/Info.plist and replacing its AppIcon with ours —
-    both changes survive a re-open of the same Flet client version.
-    """
-    import glob
-    import os
-    import plistlib
-    import shutil
-    import sys
-
-    # Find whichever flet-desktop version is installed (matches both full and light flavors)
-    flet_glob = os.path.expanduser(
-        "~/.flet/client/flet-desktop-*/Flet.app/Contents"
-    )
-    matches = sorted(glob.glob(flet_glob), reverse=True)  # newest first
-    if not matches:
-        return
-
-    contents_dir = matches[0]
-    plist_path   = os.path.join(contents_dir, "Info.plist")
-    res_dir      = os.path.join(contents_dir, "Resources")
-
-    # ── 1. Patch Info.plist ──
-    try:
-        with open(plist_path, "rb") as fh:
-            plist = plistlib.load(fh)
-
-        changed = False
-        is_frozen = getattr(sys, "frozen", False)
-        target_lsui = True if is_frozen else False
-
-        if plist.get("LSUIElement") != target_lsui:
-            plist["LSUIElement"] = target_lsui
-            changed = True
-
-        if plist.get("CFBundleName") != "System Resource Optimizer":
-            plist["CFBundleName"] = "System Resource Optimizer"
-            changed = True
-
-        if plist.get("CFBundleDisplayName") != "System Resource Optimizer":
-            plist["CFBundleDisplayName"] = "System Resource Optimizer"
-            changed = True
-
-        if changed:
-            with open(plist_path, "wb") as fh:
-                plistlib.dump(plist, fh)
-            app_dir = os.path.dirname(contents_dir)
-            os.utime(app_dir, None)
-    except Exception as exc:
-        print(f"[icon-patch] plist update skipped: {exc}", flush=True)
-
-    # ── 2. Replace Flet.app's AppIcon.icns with our icon ────────────────
-    try:
-        our_icns = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "assets", "icon.icns"
-        )
-        if os.path.exists(our_icns):
-            for name in ("AppIcon.icns", "AppIcon"):
-                dest = os.path.join(res_dir, name)
-                shutil.copy2(our_icns, dest)
-    except Exception as exc:
-        print(f"[icon-patch] icon replace skipped: {exc}", flush=True)
-
 
 if __name__ == "__main__":
     try:
         import sys as _sys
         import os as _os
-
-        # ── macOS: hide Flet.app from Dock and give it our icon ──────────
-        if _sys.platform == "darwin":
-            try:
-                import flet_desktop
-                flet_desktop.ensure_client_cached()
-            except Exception as e:
-                print(f"[icon-patch] flet_desktop import/caching failed: {e}", flush=True)
-            _patch_flet_app_macos()
 
         # ── Windows: set AppUserModelID BEFORE ft.run() creates any window
         if _sys.platform == "win32":

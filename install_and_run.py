@@ -29,7 +29,8 @@ def fix_executable_permissions():
             "Run_macOS.command",
             os.path.join("src", "core", "collector.py"),
             os.path.join("src", "training", "train.py"),
-            os.path.join("src", "main.py"),
+            os.path.join("src", "dashboard.py"),
+            os.path.join("src", "optimizer_service.py"),
         ]
         for script in scripts:
             path = os.path.join(HERE, script)
@@ -139,11 +140,19 @@ print()
 print(bold("🚀  Launching System Resource Optimizer..."))
 print()
 
-main_py = os.path.join(HERE, "src", "main.py")
+service_py = os.path.join(HERE, "src", "optimizer_service.py")
+dashboard_py = os.path.join(HERE, "src", "dashboard.py")
 
 try:
     subprocess.Popen(
-        [sys.executable, main_py],
+        [sys.executable, service_py],
+        cwd=HERE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=(OS != "Windows"),
+    )
+    subprocess.Popen(
+        [sys.executable, dashboard_py],
         cwd=HERE,
     )
     print(green("✅  App launched! You can close this window."))

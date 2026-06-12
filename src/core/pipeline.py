@@ -448,17 +448,13 @@ class Pipeline:
 
     def trigger_undo(self) -> ActionResult:
         result = self._action.undo()
-        # Notification fired from the foreground dashboard client instead
-        # (background daemon notifications are throttled by macOS)
-        # if result.action_taken:
-        #     self._notifier.notify_resume(result.affected_names)
+        if result.action_taken:
+            self._notifier.notify_resume(result.affected_names)
         return result
 
     def trigger_boost(self) -> ActionResult:
         result = self._action.boost()
-        # Notification fired from the foreground dashboard client instead
-        # (background daemon notifications are throttled by macOS)
-        # self._notifier.notify_boost()
+        self._notifier.notify_boost()
         return result
 
     def get_suspended_processes(self):
@@ -705,15 +701,53 @@ class Pipeline:
         EMA smoothing is applied to cpu_percent and mem_percent.
         """
         # ── Core metrics ──────────────────────────────────────────────────────
-        cpu_pct  = psutil.cpu_percent(interval=None)
-        per_core = psutil.cpu_percent(interval=None, percpu=True)
-        freq     = psutil.cpu_freq()
-        mem      = psutil.virtual_memory()
-        swap     = psutil.swap_memory()
+        try:
+            cpu_pct = psutil.cpu_percent(interval=None)
+        except Exception as exc:
+            if "cpu_percent_error" not in self._thermal_warnings_logged:
+                log.warning("Could not read CPU percent; using 0.0%%: %s", exc)
+                self._thermal_warnings_logged.add("cpu_percent_error")
+            cpu_pct = 0.0
+        try:
+            per_core = psutil.cpu_percent(interval=None, percpu=True)
+        except Exception as exc:
+            if "per_core_error" not in self._thermal_warnings_logged:
+                log.warning("Could not read per-core CPU percent: %s", exc)
+                self._thermal_warnings_logged.add("per_core_error")
+            per_core = []
+        try:
+            freq = psutil.cpu_freq()
+        except Exception as exc:
+            if "cpu_freq_error" not in self._thermal_warnings_logged:
+                log.warning("Could not read CPU frequency; using 0.0 MHz: %s", exc)
+                self._thermal_warnings_logged.add("cpu_freq_error")
+            freq = None
+        try:
+            mem = psutil.virtual_memory()
+            mem_used_mb = round(mem.used / 1_048_576, 2)
+            mem_available_mb = round(mem.available / 1_048_576, 2)
+            mem_percent_raw = float(mem.percent)
+        except Exception as exc:
+            if "memory_error" not in self._thermal_warnings_logged:
+                log.warning("Could not read memory stats; using zeros: %s", exc)
+                self._thermal_warnings_logged.add("memory_error")
+            mem_used_mb = 0.0
+            mem_available_mb = 0.0
+            mem_percent_raw = 0.0
+        try:
+            swap = psutil.swap_memory()
+            swap_used_mb = round(swap.used / 1_048_576, 2)
+            swap_percent = round(swap.percent, 2)
+        except Exception as exc:
+            if "swap_error" not in self._thermal_warnings_logged:
+                log.warning("Could not read swap stats; using zeros: %s", exc)
+                self._thermal_warnings_logged.add("swap_error")
+            swap_used_mb = 0.0
+            swap_percent = 0.0
         # ── Temperature ──────────────────────────────────────────────────────────
         real_temp = self._get_temp()
         if real_temp == TEMP_FALLBACK:
-            temp = self._thermal_sim.get_simulated_temp(cpu_pct, mem.percent)
+            temp = self._thermal_sim.get_simulated_temp(cpu_pct, mem_percent_raw)
         else:
             temp = real_temp
 
@@ -721,11 +755,11 @@ class Pipeline:
         alpha = 0.3
         if not self._ema_init:
             self._ema_cpu  = cpu_pct
-            self._ema_mem  = mem.percent
+            self._ema_mem  = mem_percent_raw
             self._ema_init = True
         else:
             self._ema_cpu = cpu_pct * alpha + self._ema_cpu * (1 - alpha)
-            self._ema_mem = mem.percent * alpha + self._ema_mem * (1 - alpha)
+            self._ema_mem = mem_percent_raw * alpha + self._ema_mem * (1 - alpha)
 
         # ── Network + Disk I/O speeds ─────────────────────────────────────────
         now      = time.time()
@@ -764,12 +798,12 @@ class Pipeline:
             "cpu_percent":      round(self._ema_cpu, 2),
             "cpu_percent_raw":  round(cpu_pct, 2),        # unsmoothed, for display
             "cpu_freq_mhz":     round(freq.current, 1) if freq else 0.0,
-            "mem_used_mb":      round(mem.used / 1_048_576, 2),
-            "mem_available_mb": round(mem.available / 1_048_576, 2),
+            "mem_used_mb":      mem_used_mb,
+            "mem_available_mb": mem_available_mb,
             "mem_percent":      round(self._ema_mem, 2),
-            "mem_percent_raw":  round(mem.percent, 2),     # unsmoothed, for display
-            "swap_used_mb":     round(swap.used / 1_048_576, 2),
-            "swap_percent":     round(swap.percent, 2),
+            "mem_percent_raw":  round(mem_percent_raw, 2), # unsmoothed, for display
+            "swap_used_mb":     swap_used_mb,
+            "swap_percent":     swap_percent,
             "cpu_temp_c":       temp,
             # Extended telemetry (for display cards)
             "net_sent_mbps":    round(max(0.0, net_sent),  3),
