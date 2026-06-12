@@ -1990,7 +1990,9 @@ def run_app(page: ft.Page) -> None:
                 else:
                     srv_exe = os.path.join(base_dir, "SystemResourceOptimizerService")
                     if os.path.exists(srv_exe):
-                        subprocess.Popen([srv_exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        # start_new_session detaches the service into its own
+                        # session so it survives the dashboard closing.
+                        subprocess.Popen([srv_exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             else:
                 script_path = os.path.join(_DIR, "optimizer_service.py")
                 if os.path.exists(script_path):
