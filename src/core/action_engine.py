@@ -81,11 +81,68 @@ class ActionEngine:
         "systemresourceoptimizer.exe", "optimizer.exe", "optimizer",
     }
 
+    _PROTECTIVE_LIST = {
+        "cursor", "code", "vscode", "antigravity", "electron", "terminal", "iterm", "warp",
+        "alacritty", "kitty", "hyper",
+        "bash", "zsh", "sh", "fish", "powershell", "cmd", "node", "npm", "yarn", "pnpm",
+        "cargo", "rustc", "go", "java", "javac", "ruby", "perl", "git", "docker", "xcode",
+        "android studio", "intellij", "pycharm", "webstorm", "sublime", "atom", "emacs",
+        "vim", "nvim", "nano", "chrome", "firefox", "safari", "edge", "brave", "opera",
+        "slack", "discord", "teams", "zoom", "spotify", "music", "photos", "preview",
+        "textedit", "notes", "pages", "keynote", "numbers", "word", "excel", "powerpoint",
+        "outlook", "mail", "messages", "facetime"
+    }
+
+    def _get_macos_foreground_pid(self) -> Optional[int]:
+        if sys.platform != "darwin":
+            return None
+        try:
+            import subprocess
+            cmd = ["osascript", "-e", 'tell application "System Events" to get unix id of first process whose frontmost is true']
+            output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=2.0).decode().strip()
+            if output.isdigit():
+                return int(output)
+        except Exception:
+            pass
+        return None
+
+    def _get_windows_foreground_pid(self) -> Optional[int]:
+        if sys.platform != "win32":
+            return None
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return None
+            pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value:
+                return int(pid.value)
+        except Exception:
+            pass
+        return None
+
     def __init__(self):
         self._lock             = threading.Lock()
         self._suspended: dict[int, SuspendedProcess] = {}   # pid → record
         self._auto_resume_thread: Optional[threading.Thread] = None
         self._stop_event       = threading.Event()
+        
+        self._sro_ancestors = set()
+        try:
+            current_proc = psutil.Process(os.getpid())
+            while True:
+                parent = current_proc.parent()
+                if parent is None or parent.pid == 0:
+                    break
+                if parent.pid == 1 and sys.platform != "win32":
+                    break
+                self._sro_ancestors.add((parent.pid, parent.create_time()))
+                current_proc = parent
+        except Exception:
+            pass
+            
         self.start()
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -263,7 +320,7 @@ class ActionEngine:
             # On Windows there is no PID 1; system processes live under PID 4 (System).
             try:
                 ppid = (proc.info.get("ppid") if hasattr(proc, "info") and proc.info else None) or proc.ppid()
-                if ppid == 1 and sys.platform != "win32":
+                if ppid == 1 and sys.platform == "linux":
                     return True
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
@@ -282,7 +339,7 @@ class ActionEngine:
             log.debug(f"Error checking if process is system: {e}")
             return True  # Safer to assume system process
 
-    def _is_safe_to_suspend(self, proc: psutil.Process, user_whitelist_lower: set[str] = None) -> bool:
+    def _is_safe_to_suspend(self, proc: psutil.Process, user_whitelist_lower: set[str] = None, foreground_pid: Optional[int] = None) -> bool:
         """
         Checks whitelist AND skips root/SYSTEM account processes.
         """
@@ -291,7 +348,18 @@ class ActionEngine:
             my_pid = os.getpid()
             if proc.pid == my_pid:
                 return False
-                
+
+            if foreground_pid is not None and proc.pid == foreground_pid:
+                return False
+
+            try:
+                create_time = proc.create_time() if hasattr(proc, "create_time") else None
+                if (proc.pid, create_time) in self._sro_ancestors:
+                    return False
+                if any(pid == proc.pid for pid, _ in self._sro_ancestors):
+                    return False
+            except Exception:
+                pass
             try:
                 ppid = (proc.info.get("ppid") if hasattr(proc, "info") and proc.info else None) or proc.ppid()
                 if ppid == my_pid:
@@ -307,8 +375,12 @@ class ActionEngine:
             name = (proc.info.get("name") if hasattr(proc, "info") and proc.info else None) or proc.name()
             name = name.lower()
             
+            name_no_exe = name[:-4] if name.endswith(".exe") else name
+            if name in self._PROTECTIVE_LIST or name_no_exe in self._PROTECTIVE_LIST:
+                return False
+            
             # NEVER throttle flet GUI or our own compiler executables by pattern matching name
-            if "flet" in name or "optimizer" in name or "systemresource" in name:
+            if "flet" in name or "optimizer" in name or "systemresource" in name or "antigravity" in name:
                 return False
             
             # Check user defined whitelist (cached or loaded on-the-fly)
@@ -359,11 +431,17 @@ class ActionEngine:
             user_whitelist = load_user_whitelist()
             user_whitelist_lower = {w.lower() for w in user_whitelist}
             
+            foreground_pid = None
+            if sys.platform == "darwin":
+                foreground_pid = self._get_macos_foreground_pid()
+            elif sys.platform == "win32":
+                foreground_pid = self._get_windows_foreground_pid()
+            
             # Pre-fetch all fields used during safety filters and selection to prevent N+1 queries
             for proc in psutil.process_iter(["pid", "name", "memory_info", "cpu_percent", 
                                              "username", "status", "memory_percent", "uids", "ppid"]):
                 try:
-                    if not self._is_safe_to_suspend(proc, user_whitelist_lower):
+                    if not self._is_safe_to_suspend(proc, user_whitelist_lower, foreground_pid):
                         continue
                     mem = proc.info.get("memory_info")
                     rss = mem.rss if mem else 0
@@ -385,19 +463,24 @@ class ActionEngine:
             pid = proc.pid
             
             # Whitelist and safety checks
-            if not self._is_safe_to_suspend(proc):
+            fg_pid = None
+            if sys.platform == "darwin":
+                fg_pid = self._get_macos_foreground_pid()
+            elif sys.platform == "win32":
+                fg_pid = self._get_windows_foreground_pid()
+
+            if not self._is_safe_to_suspend(proc, foreground_pid=fg_pid):
                 log.warning(f"Refusing to suspend unsafe process: {name} (PID {pid})")
                 return False
             
             log.info("Suspending process %d (%s) - Reason: %s", pid, name, reason)
             
-            # Perform actual kernel-level suspension
-            proc.suspend()
-            
             mem  = proc.memory_info().rss / (1024 * 1024)
             mem_str = f"{mem/1024:.1f}GB" if mem > 1024 else f"{mem:.1f}MB"
             
+            # Perform actual kernel-level suspension
             with self._lock:
+                proc.suspend()
                 self._suspended[pid] = SuspendedProcess(
                     pid               = pid,
                     name              = f"{name} ({mem_str})",

@@ -25,6 +25,9 @@ if _DIR not in sys.path:
     sys.path.insert(0, _DIR)
 
 from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC, VERSION, PROFILES, IPC_PORT, BASE_DIR
+from core.notifier import Notifier
+
+notifier = Notifier()
 
 # ── Design tokens ─────────────────────────────────────────────────────────────
 BG = "#0D1117"
@@ -364,7 +367,6 @@ def build_sidebar(on_nav: Callable[[str], None], active: str = "dashboard") -> f
                 section_title("Navigation"),
                 nav_item("Dashboard", ft.Icons.DASHBOARD, "dashboard"),
                 nav_item("AI Analytics", ft.Icons.INSIGHTS, "analytics"),
-                nav_item("Science Hub", ft.Icons.SCHOOL, "science_hub"),
                 nav_item("Settings", ft.Icons.SETTINGS, "settings"),
                 nav_item("Help & UX Guide", ft.Icons.HELP, "help"),
                 ft.Container(expand=True),
@@ -942,6 +944,10 @@ def build_settings_view(autopilot_status: ft.Text, page: ft.Page) -> ft.Column:
     def on_optimizer_toggle(e):
         val = e.control.value
         client.send_request({"type": "command", "cmd": "toggle_optimizer", "value": val})
+        if val:
+            notifier.send(title="⚡ SRO: Optimizer Resumed", message="Background optimizer loop has been resumed.")
+        else:
+            notifier.send(title="⚡ SRO: Optimizer Suspended", message="Background optimizer loop has been suspended. All processes resumed.")
         page.snack_bar = ft.SnackBar(
             ft.Text(f"Background optimizer engine {'resumed' if val else 'suspended'}.", color=TEXT),
             bgcolor=CARD_ALT,
@@ -1092,14 +1098,17 @@ def build_settings_view(autopilot_status: ft.Text, page: ft.Page) -> ft.Column:
         page.user_shutdown_requested = True
         shutdown_resp = client.send_request({"type": "command", "cmd": "shutdown"})
         if shutdown_resp.get("status") == "ok":
+            notifier.send(
+                title="⚡ SRO: Service Stopped",
+                message="Background optimizer service has been shut down. All suspended processes resumed."
+            )
             page.snack_bar = ft.SnackBar(ft.Text("Background service shutdown signal sent. All processes resumed.", color=TEXT), bgcolor=CARD_ALT)
             page.snack_bar.open = True
             page.update()
-            # Cleanly close the app window after a 2-second delay
             def close_window():
                 time.sleep(2.0)
                 try:
-                    page.window.close()
+                    page.run_task(page.window.close)
                 except Exception:
                     pass
             threading.Thread(target=close_window, daemon=True).start()
@@ -1802,13 +1811,11 @@ def run_app(page: ft.Page) -> None:
     }
 
     ui, dashboard_view, analytics_view, settings_view, right_rail = build_dashboard_content(page, ui_callbacks)
-    science_hub_view = build_science_hub_view()
     help_view = build_help_view(page)
     
     views = {
         "dashboard": dashboard_view,
         "analytics": analytics_view,
-        "science_hub": science_hub_view,
         "settings": settings_view,
         "help": help_view,
     }
@@ -1822,7 +1829,7 @@ def run_app(page: ft.Page) -> None:
         view.visible = (k == "dashboard")
 
     views_stack = ft.Stack(
-        controls=[dashboard_view, analytics_view, science_hub_view, settings_view, help_view],
+        controls=[dashboard_view, analytics_view, settings_view, help_view],
         expand=True,
     )
 
@@ -1890,9 +1897,6 @@ def run_app(page: ft.Page) -> None:
     )
 
     def navigate(key: str) -> None:
-        if not client.connected:
-            return  # block navigation in offline mode
-            
         if key not in views:
             return
             
@@ -1913,7 +1917,14 @@ def run_app(page: ft.Page) -> None:
             views["settings"].left = 0
             views["settings"].right = 0
             views["settings"].bottom = 0
-            views_stack.controls[3] = views["settings"]
+            
+            # Reassign controls array to trigger Flet change detection
+            views_stack.controls = [
+                views["dashboard"],
+                views["analytics"],
+                views["settings"],
+                views["help"]
+            ]
 
         for k, view in views.items():
             view.visible = (k == key)
@@ -2186,10 +2197,140 @@ def main(page: ft.Page) -> None:
     run_app(page)
 
 
+def _set_windows_taskbar_icon_async() -> None:
+    import threading
+
+    def worker():
+        import time
+        import os
+        import ctypes
+        from ctypes import wintypes
+        import psutil
+
+        # Wait for the Flet child process to start (e.g. sleep 0.5s initially, then poll)
+        time.sleep(0.5)
+
+        for _ in range(40):  # 40 * 0.5s = 20s max
+            try:
+                current_process = psutil.Process(os.getpid())
+                child_pids = {p.pid for p in current_process.children(recursive=True)}
+            except Exception:
+                child_pids = set()
+            child_pids.add(os.getpid())
+
+            hwnd_found = [None]
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def enum_callback(hwnd, lparam):
+                if ctypes.windll.user32.IsWindowVisible(hwnd):
+                    class_name = ctypes.create_unicode_buffer(256)
+                    ctypes.windll.user32.GetClassNameW(hwnd, class_name, 256)
+                    if class_name.value == "FLUTTER_RUNNER_WIN32_WINDOW":
+                        pid = wintypes.DWORD()
+                        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                        if pid.value in child_pids:
+                            hwnd_found[0] = hwnd
+                            return False
+                return True
+
+            cb = WNDENUMPROC(enum_callback)
+            ctypes.windll.user32.EnumWindows(cb, 0)
+
+            if hwnd_found[0] is not None:
+                hwnd = hwnd_found[0]
+                try:
+                    class GUID(ctypes.Structure):
+                        _fields_ = [
+                            ("Data1", ctypes.c_ulong),
+                            ("Data2", ctypes.c_ushort),
+                            ("Data3", ctypes.c_ushort),
+                            ("Data4", ctypes.c_ubyte * 8),
+                        ]
+                        def __init__(self, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8):
+                            self.Data1 = l
+                            self.Data2 = w1
+                            self.Data3 = w2
+                            self.Data4 = (ctypes.c_ubyte * 8)(b1, b2, b3, b4, b5, b6, b7, b8)
+
+                    IID_IPropertyStore = GUID(0x886d8eeb, 0x8cf2, 0x4446, 0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99)
+                    shell32 = ctypes.windll.shell32
+                    prop_store = ctypes.c_void_p()
+
+                    hr = shell32.SHGetPropertyStoreForWindow(
+                        hwnd,
+                        ctypes.byref(IID_IPropertyStore),
+                        ctypes.byref(prop_store)
+                    )
+
+                    if hr >= 0 and prop_store.value:
+                        class PROPERTYKEY(ctypes.Structure):
+                            _fields_ = [
+                                ("fmtid", GUID),
+                                ("pid", ctypes.c_ulong),
+                            ]
+                        PKEY_AppUserModel_ID = PROPERTYKEY(
+                            GUID(0x9F4C2855, 0x0379, 0x4D01, 0x87, 0xE5, 0x45, 0xD6, 0xD7, 0x42, 0x46, 0x94),
+                            5
+                        )
+                        class PROPVARIANT(ctypes.Structure):
+                            _fields_ = [
+                                ("vt", ctypes.c_ushort),
+                                ("wReserved1", ctypes.c_ushort),
+                                ("wReserved2", ctypes.c_ushort),
+                                ("wReserved3", ctypes.c_ushort),
+                                ("pwszVal", ctypes.c_wchar_p),
+                                ("padding", ctypes.c_ubyte * 8),
+                            ]
+                        pv = PROPVARIANT()
+                        pv.vt = 31
+                        pv.pwszVal = "addo561.sro.systemresourceoptimizer.v2"
+
+                        vtable_ptr = ctypes.cast(prop_store, ctypes.POINTER(ctypes.c_void_p))
+                        vtable = ctypes.cast(vtable_ptr[0], ctypes.POINTER(ctypes.c_void_p))
+
+                        set_value_proto = ctypes.WINFUNCTYPE(
+                            ctypes.c_long,
+                            ctypes.c_void_p,
+                            ctypes.POINTER(PROPERTYKEY),
+                            ctypes.POINTER(PROPVARIANT)
+                        )
+                        SetValue = set_value_proto(vtable[6])
+
+                        commit_proto = ctypes.WINFUNCTYPE(
+                            ctypes.c_long,
+                            ctypes.c_void_p
+                        )
+                        Commit = commit_proto(vtable[7])
+
+                        release_proto = ctypes.WINFUNCTYPE(
+                            ctypes.c_ulong,
+                            ctypes.c_void_p
+                        )
+                        Release = release_proto(vtable[2])
+
+                        hr_set = SetValue(prop_store, ctypes.byref(PKEY_AppUserModel_ID), ctypes.byref(pv))
+                        hr_commit = Commit(prop_store)
+                        Release(prop_store)
+
+                        if hr_set >= 0 and hr_commit >= 0:
+                            print(f"[win-icon-patch] Successfully set System.AppUserModel.ID to addo561.sro.systemresourceoptimizer.v2", flush=True)
+                            break
+                        else:
+                            print(f"[win-icon-patch] SetValue (hr={hr_set}) or Commit (hr={hr_commit}) failed", flush=True)
+                except Exception as exc:
+                    print(f"[win-icon-patch] Error setting property store: {exc}", flush=True)
+
+            time.sleep(0.5)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
+
 def _patch_flet_app_macos() -> None:
     """
     Hides the Flet renderer subprocess from the macOS Dock so only our
-    app's custom icon appears.  Done by injecting LSUIElement=True into
+    app's custom icon appears.  Done by injecting LSUIElement into
     Flet.app/Contents/Info.plist and replacing its AppIcon with ours —
     both changes survive a re-open of the same Flet client version.
     """
@@ -2197,6 +2338,7 @@ def _patch_flet_app_macos() -> None:
     import os
     import plistlib
     import shutil
+    import sys
 
     # Find whichever flet-desktop version is installed (matches both full and light flavors)
     flet_glob = os.path.expanduser(
@@ -2210,15 +2352,32 @@ def _patch_flet_app_macos() -> None:
     plist_path   = os.path.join(contents_dir, "Info.plist")
     res_dir      = os.path.join(contents_dir, "Resources")
 
-    # ── 1. Patch Info.plist to add LSUIElement so Flet.app is Dock-less ──
+    # ── 1. Patch Info.plist ──
     try:
         with open(plist_path, "rb") as fh:
             plist = plistlib.load(fh)
 
-        if not plist.get("LSUIElement"):          # only write if needed
-            plist["LSUIElement"] = True
+        changed = False
+        is_frozen = getattr(sys, "frozen", False)
+        target_lsui = True if is_frozen else False
+
+        if plist.get("LSUIElement") != target_lsui:
+            plist["LSUIElement"] = target_lsui
+            changed = True
+
+        if plist.get("CFBundleName") != "System Resource Optimizer":
+            plist["CFBundleName"] = "System Resource Optimizer"
+            changed = True
+
+        if plist.get("CFBundleDisplayName") != "System Resource Optimizer":
+            plist["CFBundleDisplayName"] = "System Resource Optimizer"
+            changed = True
+
+        if changed:
             with open(plist_path, "wb") as fh:
                 plistlib.dump(plist, fh)
+            app_dir = os.path.dirname(contents_dir)
+            os.utime(app_dir, None)
     except Exception as exc:
         print(f"[icon-patch] plist update skipped: {exc}", flush=True)
 
@@ -2242,17 +2401,24 @@ if __name__ == "__main__":
 
         # ── macOS: hide Flet.app from Dock and give it our icon ──────────
         if _sys.platform == "darwin":
+            try:
+                import flet_desktop
+                flet_desktop.ensure_client_cached()
+            except Exception as e:
+                print(f"[icon-patch] flet_desktop import/caching failed: {e}", flush=True)
             _patch_flet_app_macos()
 
         # ── Windows: set AppUserModelID BEFORE ft.run() creates any window
-        # This must happen first so Windows taskbar groups our button under
-        # our .ico icon, not the default Flet / Python icon.
         if _sys.platform == "win32":
             import ctypes as _ct
             try:
                 _ct.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
                     "addo561.sro.systemresourceoptimizer.v2"
                 )
+            except Exception:
+                pass
+            try:
+                _set_windows_taskbar_icon_async()
             except Exception:
                 pass
 

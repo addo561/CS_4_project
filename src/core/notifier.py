@@ -30,17 +30,32 @@ from config import BASE_DIR
 
 def _send_macos(title: str, message: str):
     """Use macOS built-in osascript to display notifications instantly."""
-    # Escape quotes to avoid breaking the AppleScript string
-    title   = title.replace('"', '\\"').replace("'", "\\'")
-    message = message.replace('"', '\\"').replace("'", "\\'")
+    import time as _time
+    # Escape double-quotes for AppleScript string literals
+    title   = title.replace('"', '\\"')
+    message = message.replace('"', '\\"')
     
-    script = f'display notification "{message}" with title "{title}"'
-        
-    subprocess.Popen(
-        ["osascript", "-e", script],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    # Add a unique microsecond tag to prevent macOS notification coalescing
+    # (macOS silently replaces notifications with identical title+message)
+    _uid = int(_time.time() * 1000) % 100000
+    
+    script = (
+        f'display notification "{message}" '
+        f'with title "{title}" '
+        f'subtitle "Event ID: {_uid}" '
+        f'sound name "Blow"'
     )
+    
+    try:
+        subprocess.Popen(
+            ["osascript", "-e", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,   # fully detach from parent process
+            close_fds=True,
+        )
+    except Exception as exc:
+        log.warning(f"osascript notification failed: {exc}")
 
 
 def _send_windows(title: str, message: str, timeout: int):

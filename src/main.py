@@ -344,7 +344,6 @@ def build_sidebar(on_nav: Callable[[str], None], active: str = "dashboard") -> f
                 section_title("Navigation"),
                 nav_item("Dashboard", ft.Icons.DASHBOARD, "dashboard"),
                 nav_item("AI Analytics", ft.Icons.INSIGHTS, "analytics"),
-                nav_item("Science Hub", ft.Icons.SCHOOL, "science_hub"),
                 nav_item("Settings", ft.Icons.SETTINGS, "settings"),
                 nav_item("Help & UX Guide", ft.Icons.HELP, "help"),
                 ft.Container(expand=True),
@@ -1993,12 +1992,10 @@ def run_app(page: ft.Page) -> None:
     ui, dashboard_view, analytics_view, settings_view, right_rail = build_dashboard_content(page, ui_callbacks)
     page.ui = ui
 
-    science_hub_view = build_science_hub_view()
     help_view = build_help_view(page)
     views = {
         "dashboard": dashboard_view,
         "analytics": analytics_view,
-        "science_hub": science_hub_view,
         "settings": settings_view,
         "help": help_view,
     }
@@ -2013,7 +2010,7 @@ def run_app(page: ft.Page) -> None:
         view.visible = (k == "dashboard")
 
     views_stack = ft.Stack(
-        controls=[dashboard_view, analytics_view, science_hub_view, settings_view, help_view],
+        controls=[dashboard_view, analytics_view, settings_view, help_view],
         expand=True,
     )
 
@@ -2058,7 +2055,6 @@ def run_app(page: ft.Page) -> None:
             views_stack.controls = [
                 views["dashboard"],
                 views["analytics"],
-                views["science_hub"],
                 views["settings"],
                 views["help"]
             ]
@@ -2383,6 +2379,136 @@ def main(page: ft.Page) -> None:
     run_app(page)
 
 
+def _set_windows_taskbar_icon_async() -> None:
+    import threading
+
+    def worker():
+        import time
+        import os
+        import ctypes
+        from ctypes import wintypes
+        import psutil
+
+        # Wait for the Flet child process to start (e.g. sleep 0.5s initially, then poll)
+        time.sleep(0.5)
+
+        for _ in range(40):  # 40 * 0.5s = 20s max
+            try:
+                current_process = psutil.Process(os.getpid())
+                child_pids = {p.pid for p in current_process.children(recursive=True)}
+            except Exception:
+                child_pids = set()
+            child_pids.add(os.getpid())
+
+            hwnd_found = [None]
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def enum_callback(hwnd, lparam):
+                if ctypes.windll.user32.IsWindowVisible(hwnd):
+                    class_name = ctypes.create_unicode_buffer(256)
+                    ctypes.windll.user32.GetClassNameW(hwnd, class_name, 256)
+                    if class_name.value == "FLUTTER_RUNNER_WIN32_WINDOW":
+                        pid = wintypes.DWORD()
+                        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                        if pid.value in child_pids:
+                            hwnd_found[0] = hwnd
+                            return False
+                return True
+
+            cb = WNDENUMPROC(enum_callback)
+            ctypes.windll.user32.EnumWindows(cb, 0)
+
+            if hwnd_found[0] is not None:
+                hwnd = hwnd_found[0]
+                try:
+                    class GUID(ctypes.Structure):
+                        _fields_ = [
+                            ("Data1", ctypes.c_ulong),
+                            ("Data2", ctypes.c_ushort),
+                            ("Data3", ctypes.c_ushort),
+                            ("Data4", ctypes.c_ubyte * 8),
+                        ]
+                        def __init__(self, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8):
+                            self.Data1 = l
+                            self.Data2 = w1
+                            self.Data3 = w2
+                            self.Data4 = (ctypes.c_ubyte * 8)(b1, b2, b3, b4, b5, b6, b7, b8)
+
+                    IID_IPropertyStore = GUID(0x886d8eeb, 0x8cf2, 0x4446, 0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99)
+                    shell32 = ctypes.windll.shell32
+                    prop_store = ctypes.c_void_p()
+
+                    hr = shell32.SHGetPropertyStoreForWindow(
+                        hwnd,
+                        ctypes.byref(IID_IPropertyStore),
+                        ctypes.byref(prop_store)
+                    )
+
+                    if hr >= 0 and prop_store.value:
+                        class PROPERTYKEY(ctypes.Structure):
+                            _fields_ = [
+                                ("fmtid", GUID),
+                                ("pid", ctypes.c_ulong),
+                            ]
+                        PKEY_AppUserModel_ID = PROPERTYKEY(
+                            GUID(0x9F4C2855, 0x0379, 0x4D01, 0x87, 0xE5, 0x45, 0xD6, 0xD7, 0x42, 0x46, 0x94),
+                            5
+                        )
+                        class PROPVARIANT(ctypes.Structure):
+                            _fields_ = [
+                                ("vt", ctypes.c_ushort),
+                                ("wReserved1", ctypes.c_ushort),
+                                ("wReserved2", ctypes.c_ushort),
+                                ("wReserved3", ctypes.c_ushort),
+                                ("pwszVal", ctypes.c_wchar_p),
+                                ("padding", ctypes.c_ubyte * 8),
+                            ]
+                        pv = PROPVARIANT()
+                        pv.vt = 31
+                        pv.pwszVal = "addo561.sro.systemresourceoptimizer.v2"
+
+                        vtable_ptr = ctypes.cast(prop_store, ctypes.POINTER(ctypes.c_void_p))
+                        vtable = ctypes.cast(vtable_ptr[0], ctypes.POINTER(ctypes.c_void_p))
+
+                        set_value_proto = ctypes.WINFUNCTYPE(
+                            ctypes.c_long,
+                            ctypes.c_void_p,
+                            ctypes.POINTER(PROPERTYKEY),
+                            ctypes.POINTER(PROPVARIANT)
+                        )
+                        SetValue = set_value_proto(vtable[6])
+
+                        commit_proto = ctypes.WINFUNCTYPE(
+                            ctypes.c_long,
+                            ctypes.c_void_p
+                        )
+                        Commit = commit_proto(vtable[7])
+
+                        release_proto = ctypes.WINFUNCTYPE(
+                            ctypes.c_ulong,
+                            ctypes.c_void_p
+                        )
+                        Release = release_proto(vtable[2])
+
+                        hr_set = SetValue(prop_store, ctypes.byref(PKEY_AppUserModel_ID), ctypes.byref(pv))
+                        hr_commit = Commit(prop_store)
+                        Release(prop_store)
+
+                        if hr_set >= 0 and hr_commit >= 0:
+                            print(f"[win-icon-patch] Successfully set System.AppUserModel.ID to addo561.sro.systemresourceoptimizer.v2", flush=True)
+                            break
+                        else:
+                            print(f"[win-icon-patch] SetValue (hr={hr_set}) or Commit (hr={hr_commit}) failed", flush=True)
+                except Exception as exc:
+                    print(f"[win-icon-patch] Error setting property store: {exc}", flush=True)
+
+            time.sleep(0.5)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
+
 if __name__ == "__main__":
     try:
         import sys as _sys
@@ -2390,6 +2516,12 @@ if __name__ == "__main__":
 
         # ── macOS: hide Flet.app from Dock, replace its icon with ours ───
         if _sys.platform == "darwin":
+            try:
+                import flet_desktop
+                flet_desktop.ensure_client_cached()
+            except Exception as e:
+                print(f"[icon-patch] flet_desktop import/caching failed: {e}", flush=True)
+
             # Import the same patch function from dashboard.py's module context
             import glob as _glob
             import plistlib as _pl
@@ -2408,10 +2540,28 @@ if __name__ == "__main__":
                 try:
                     with open(plist_path, "rb") as fh:
                         plist = _pl.load(fh)
-                    if not plist.get("LSUIElement"):
-                        plist["LSUIElement"] = True
+                    
+                    changed = False
+                    is_frozen = getattr(_sys, "frozen", False)
+                    target_lsui = True if is_frozen else False
+                    
+                    if plist.get("LSUIElement") != target_lsui:
+                        plist["LSUIElement"] = target_lsui
+                        changed = True
+                        
+                    if plist.get("CFBundleName") != "System Resource Optimizer":
+                        plist["CFBundleName"] = "System Resource Optimizer"
+                        changed = True
+                        
+                    if plist.get("CFBundleDisplayName") != "System Resource Optimizer":
+                        plist["CFBundleDisplayName"] = "System Resource Optimizer"
+                        changed = True
+                        
+                    if changed:
                         with open(plist_path, "wb") as fh:
                             _pl.dump(plist, fh)
+                        app_dir = _os.path.dirname(contents_dir)
+                        _os.utime(app_dir, None)
                 except Exception as exc:
                     print(f"[icon-patch] plist skipped: {exc}", flush=True)
                 try:
@@ -2434,6 +2584,10 @@ if __name__ == "__main__":
                 _ct.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
                     "addo561.sro.systemresourceoptimizer.v2"
                 )
+            except Exception:
+                pass
+            try:
+                _set_windows_taskbar_icon_async()
             except Exception:
                 pass
 

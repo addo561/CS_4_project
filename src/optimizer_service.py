@@ -300,20 +300,20 @@ class OptimizerService:
                         if not self.pipeline._thread or not self.pipeline._thread.is_alive():
                             self.pipeline.start()
                             self.add_log("Optimizer engine resumed", ACCENT)
-                            if self.pipeline._notifier:
-                                self.pipeline._notifier.send(
-                                    title="⚡ SRO: Optimizer Resumed",
-                                    message="Background optimizer loop has been resumed."
-                                )
+                            # if self.pipeline._notifier:
+                            #     self.pipeline._notifier.send(
+                            #         title="⚡ SRO: Optimizer Resumed",
+                            #         message="Background optimizer loop has been resumed."
+                            #     )
                     return {"status": "ok", "optimizer_active": True}
                 else:
                     if self.pipeline:
                         if self.pipeline._thread and self.pipeline._thread.is_alive():
-                            if self.pipeline._notifier:
-                                self.pipeline._notifier.send(
-                                    title="⚡ SRO: Optimizer Suspended",
-                                    message="Background optimizer loop has been suspended. All processes resumed."
-                                )
+                            # if self.pipeline._notifier:
+                            #     self.pipeline._notifier.send(
+                            #         title="⚡ SRO: Optimizer Suspended",
+                            #         message="Background optimizer loop has been suspended. All processes resumed."
+                            #     )
                             self.pipeline.stop()
                             self.add_log("Optimizer engine suspended", MUTED)
                     return {"status": "ok", "optimizer_active": False}
