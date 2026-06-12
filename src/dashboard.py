@@ -2010,159 +2010,160 @@ def run_app(page: ft.Page) -> None:
             if getattr(page, "user_shutdown_requested", False):
                 break  # Exit loop entirely — do NOT continue spinning
 
-            if not client.connected:
-                # Show overlay immediately
-                overlay_host.visible = True
-                try:
-                    page.update()
-                except Exception:
-                    pass
-                
-                # Attempt to auto-start if not done yet
-                if not service_start_attempted and not getattr(page, "user_shutdown_requested", False):
-                    launch_background_service()
-                    service_start_attempted = True
-                    await asyncio.sleep(1.0)
-                try:
-                    page.update()
-                except Exception:
-                    pass
+            try:
+                if not client.connected:
+                    # Show overlay immediately
+                    overlay_host.visible = True
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
                     
-                if client.connect():
-                    log_resp = client.send_request({"type": "get_full_state"})
-                    if log_resp.get("connected"):
-                        # Process pending notifications from the background daemon
-                        for notif in log_resp.get("pending_notifications", []):
+                    # Attempt to auto-start if not done yet
+                    if not service_start_attempted and not getattr(page, "user_shutdown_requested", False):
+                        launch_background_service()
+                        service_start_attempted = True
+                        await asyncio.sleep(1.0)
+                    try:
+                        page.update()
+                    except Exception:
+                        pass
+                        
+                    if client.connect():
+                        log_resp = client.send_request({"type": "get_full_state"})
+                        if log_resp.get("connected"):
+                            # Process pending notifications from the background daemon
+                            for notif in log_resp.get("pending_notifications", []):
+                                try:
+                                    notifier.send(title=notif["title"], message=notif["message"])
+                                except Exception:
+                                    pass
+
+                            # Reconnected successfully! Populate history charts
+                            first_connect = False
+                            service_start_attempted = False
+                            
+                            # Populate metrics history
+                            history = log_resp.get("history", [])
+                            ui.charts[0].data.clear()
+                            ui.charts[1].data.clear()
+                            ui.charts[2].data.clear()
+                            
+                            # Fill deques
+                            for i in range(120):
+                                ui.charts[0].data.append(0.0)
+                                ui.charts[1].data.append(0.0)
+                                ui.charts[2].data.append(0.0)
+                                
+                            for item in history:
+                                f = item.get("features", {})
+                                cpu = f.get("cpu_percent_raw", f.get("cpu_percent", 0))
+                                mem = f.get("mem_percent_raw", f.get("mem_percent", 0))
+                                tmp = f.get("cpu_temp_c", 0)
+                                ui.charts[0].push(cpu, redraw=False)
+                                ui.charts[1].push(mem, redraw=False)
+                                if tmp > 0:
+                                    ui.charts[2].push(tmp, redraw=False)
+
+                            # Set Autopilot UI Switch
+                            ui.autopilot.value = log_resp.get("autopilot_enabled", True)
+                            ui.autopilot_status.value = f"Status: {'ON' if ui.autopilot.value else 'OFF'}"
+                            ui.autopilot_status.color = ACCENT if ui.autopilot.value else MUTED
+                            
+                            # Set logs
+                            ui.log_list.controls.clear()
+                            for entry in log_resp.get("logs", []):
+                                ts = entry.get("time", "")
+                                msg = entry.get("message", "")
+                                color = entry.get("color", ACCENT)
+                                ui.log_list.controls.append(
+                                    body_text(f"[{ts}] {msg}", size=11, color=color, font_family="monospace")
+                                )
+                            
+                            # Trigger UI Refresh
+                            overlay_host.visible = False
+                            ui.sync_charts()
                             try:
-                                notifier.send(title=notif["title"], message=notif["message"])
+                                page.update()
                             except Exception:
                                 pass
+                    else:
+                        await asyncio.sleep(2.0)
+                        continue
 
-                        # Reconnected successfully! Populate history charts
-                        first_connect = False
-                        service_start_attempted = False
-                        
-                        # Populate metrics history
-                        history = log_resp.get("history", [])
-                        ui.charts[0].data.clear()
-                        ui.charts[1].data.clear()
-                        ui.charts[2].data.clear()
-                        
-                        # Fill deques
-                        for i in range(120):
-                            ui.charts[0].data.append(0.0)
-                            ui.charts[1].data.append(0.0)
-                            ui.charts[2].data.append(0.0)
-                            
-                        for item in history:
-                            f = item.get("features", {})
+                # Connected - poll updates
+                resp = client.send_request({"type": "get_update"})
+                if resp.get("connected"):
+                    # Process pending notifications from the background daemon
+                    for notif in resp.get("pending_notifications", []):
+                        try:
+                            notifier.send(title=notif["title"], message=notif["message"])
+                        except Exception:
+                            pass
+                    optimizer_active = resp.get("optimizer_active", True)
+                    if not optimizer_active:
+                        ui.gauge_ring.value = 0.0
+                        ui.gauge_ring.color = MUTED
+                        ui.gauge_value.value = "OFF"
+                        ui.gauge_value.color = MUTED
+                        ui.gauge_insight.value = "Optimizer engine suspended by user"
+                        ui.gauge_insight.color = MUTED
+                    else:
+                        latest = resp.get("latest_result")
+                        if latest:
+                            f = latest.get("features", {})
                             cpu = f.get("cpu_percent_raw", f.get("cpu_percent", 0))
                             mem = f.get("mem_percent_raw", f.get("mem_percent", 0))
                             tmp = f.get("cpu_temp_c", 0)
-                            ui.charts[0].push(cpu, redraw=False)
-                            ui.charts[1].push(mem, redraw=False)
-                            if tmp > 0:
-                                ui.charts[2].push(tmp, redraw=False)
-
-                        # Set Autopilot UI Switch
-                        ui.autopilot.value = log_resp.get("autopilot_enabled", True)
-                        ui.autopilot_status.value = f"Status: {'ON' if ui.autopilot.value else 'OFF'}"
-                        ui.autopilot_status.color = ACCENT if ui.autopilot.value else MUTED
-                        
-                        # Set logs
-                        ui.log_list.controls.clear()
-                        for entry in log_resp.get("logs", []):
-                            ts = entry.get("time", "")
-                            msg = entry.get("message", "")
-                            color = entry.get("color", ACCENT)
-                            ui.log_list.controls.append(
-                                body_text(f"[{ts}] {msg}", size=11, color=color, font_family="monospace")
-                            )
-                        
-                        # Trigger UI Refresh
-                        overlay_host.visible = False
-                        ui.sync_charts()
-                        try:
-                            page.update()
-                        except Exception:
-                            pass
-                else:
-                    await asyncio.sleep(2.0)
-                    continue
-
-            # Connected - poll updates
-            resp = client.send_request({"type": "get_update"})
-            if resp.get("connected"):
-                # Process pending notifications from the background daemon
-                for notif in resp.get("pending_notifications", []):
-                    try:
-                        notifier.send(title=notif["title"], message=notif["message"])
-                    except Exception:
-                        pass
-                optimizer_active = resp.get("optimizer_active", True)
-                if not optimizer_active:
-                    ui.gauge_ring.value = 0.0
-                    ui.gauge_ring.color = MUTED
-                    ui.gauge_value.value = "OFF"
-                    ui.gauge_value.color = MUTED
-                    ui.gauge_insight.value = "Optimizer engine suspended by user"
-                    ui.gauge_insight.color = MUTED
-                else:
-                    latest = resp.get("latest_result")
-                    if latest:
-                        f = latest.get("features", {})
-                        cpu = f.get("cpu_percent_raw", f.get("cpu_percent", 0))
-                        mem = f.get("mem_percent_raw", f.get("mem_percent", 0))
-                        tmp = f.get("cpu_temp_c", 0)
-                        swap = f.get("swap_percent", 0)
-                        
-                        ui.metrics[0].update(cpu)
-                        ui.metrics[1].update(mem)
-                        ui.metrics[2].update(tmp if tmp > 0 else 0)
-                        ui.metrics[3].update(swap)
-                        
-                        ui.charts[0].push(cpu, redraw=True)
-                        ui.charts[1].push(mem, redraw=True)
-                        if tmp > 0:
-                            ui.charts[2].push(tmp, redraw=True)
+                            swap = f.get("swap_percent", 0)
                             
-                        _update_analytics_dict(ui, latest)
+                            ui.metrics[0].update(cpu)
+                            ui.metrics[1].update(mem)
+                            ui.metrics[2].update(tmp if tmp > 0 else 0)
+                            ui.metrics[3].update(swap)
+                            
+                            ui.charts[0].push(cpu, redraw=True)
+                            ui.charts[1].push(mem, redraw=True)
+                            if tmp > 0:
+                                ui.charts[2].push(tmp, redraw=True)
+                                
+                            _update_analytics_dict(ui, latest)
 
-                        if latest.get("calibrating"):
-                            cal_prog = resp.get("calib_progress", (0, CALIBRATION_SECONDS))
-                            elapsed, total = cal_prog
-                            if elapsed != -1:
-                                pct = min(100, max(1, int((elapsed / total) * 100)))
-                                ui.gauge_insight.value = f"Calibrating telemetry ({pct}%)..."
-                                ui.gauge_insight.color = WARN
-                                ui.gauge_ring.value = elapsed / total
-                                ui.gauge_ring.color = WARN
-                                ui.gauge_value.value = f"{pct}%"
-                                ui.gauge_value.color = WARN
-                        else:
-                            conf = latest.get("confidence", 0.0)
-                            pct = int(conf * 100)
-                            col = severity(pct)
-                            ui.gauge_ring.value = conf
-                            ui.gauge_ring.color = col
-                            ui.gauge_value.value = f"{pct}%"
-                            ui.gauge_value.color = col
-                            if pct >= 80:
-                                ui.gauge_insight.value = f"High load risk · CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
-                                ui.gauge_insight.color = CRIT
-                            elif pct >= 55:
-                                ui.gauge_insight.value = f"Moderate risk · CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
-                                ui.gauge_insight.color = WARN
+                            if latest.get("calibrating"):
+                                cal_prog = resp.get("calib_progress", (0, CALIBRATION_SECONDS))
+                                elapsed, total = cal_prog
+                                if elapsed != -1:
+                                    pct = min(100, max(1, int((elapsed / total) * 100)))
+                                    ui.gauge_insight.value = f"Calibrating telemetry ({pct}%)..."
+                                    ui.gauge_insight.color = WARN
+                                    ui.gauge_ring.value = elapsed / total
+                                    ui.gauge_ring.color = WARN
+                                    ui.gauge_value.value = f"{pct}%"
+                                    ui.gauge_value.color = WARN
                             else:
-                                ui.gauge_insight.value = "System healthy"
-                                ui.gauge_insight.color = ACCENT
-                    else:
-                        ui.gauge_ring.value = 0.0
-                        ui.gauge_ring.color = MUTED
-                        ui.gauge_value.value = "..."
-                        ui.gauge_value.color = MUTED
-                        ui.gauge_insight.value = "Initializing telemetry..."
-                        ui.gauge_insight.color = MUTED
+                                conf = latest.get("confidence", 0.0)
+                                pct = int(conf * 100)
+                                col = severity(pct)
+                                ui.gauge_ring.value = conf
+                                ui.gauge_ring.color = col
+                                ui.gauge_value.value = f"{pct}%"
+                                ui.gauge_value.color = col
+                                if pct >= 80:
+                                    ui.gauge_insight.value = f"High load risk · CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
+                                    ui.gauge_insight.color = CRIT
+                                elif pct >= 55:
+                                    ui.gauge_insight.value = f"Moderate risk · CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
+                                    ui.gauge_insight.color = WARN
+                                else:
+                                    ui.gauge_insight.value = "System healthy"
+                                    ui.gauge_insight.color = ACCENT
+                        else:
+                            ui.gauge_ring.value = 0.0
+                            ui.gauge_ring.color = MUTED
+                            ui.gauge_value.value = "..."
+                            ui.gauge_value.color = MUTED
+                            ui.gauge_insight.value = "Initializing telemetry..."
+                            ui.gauge_insight.color = MUTED
 
                 # Suspended table
                 suspended = resp.get("suspended_processes", [])
@@ -2204,6 +2205,9 @@ def run_app(page: ft.Page) -> None:
                 client.connected = False
                 overlay_host.visible = True
                 
+            except Exception as err:
+                log.error(f"Error in poll_service_worker loop: {err}", exc_info=True)
+
             try:
                 page.update()
             except Exception:
