@@ -2185,7 +2185,7 @@ def run_app(page: ft.Page) -> None:
                 top_procs = resp.get("top_processes", [])
                 ui.proc_table.rows = proc_rows(top_procs)
 
-                # Sync Autopilot state
+                # Sync Autopilot
                 ui.autopilot.value = resp.get("autopilot_enabled", True)
                 ui.autopilot_status.value = f"Status: {'ON' if ui.autopilot.value else 'OFF'}"
                 ui.autopilot_status.color = ACCENT if ui.autopilot.value else MUTED
@@ -2201,10 +2201,9 @@ def run_app(page: ft.Page) -> None:
                     )
 
                 overlay_host.visible = False
-            else:
-                client.connected = False
-                overlay_host.visible = True
-                
+                else:
+                    client.connected = False
+                    overlay_host.visible = True
             except Exception as err:
                 log.error(f"Error in poll_service_worker loop: {err}", exc_info=True)
 
