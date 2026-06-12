@@ -23,6 +23,7 @@ if _DIR not in sys.path:
     sys.path.insert(0, _DIR)
 
 from core.pipeline import Pipeline, PipelineResult
+from core.notifier import Notifier
 from config import (
     CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, PROFILES,
     load_user_settings, save_user_settings,
@@ -81,12 +82,32 @@ class OptimizerService:
         # Pending notifications queue for client delivery
         self.pending_notifications = []
 
+        # Tracks when a dashboard client last polled. While a client is active
+        # we hand notifications to it (the foreground process delivers them
+        # reliably on macOS). When no client is connected, the service fires the
+        # OS notification itself so the user still gets alerts in the background.
+        self.last_client_poll = 0.0
+        self.CLIENT_ACTIVE_WINDOW = 6.0  # seconds since last poll = "dashboard open"
+        self._direct_notifier = Notifier()  # no queue_callback -> fires OS notification
+
         # Add startup log entry
         self.add_log("Optimizer background service initialized", ACCENT)
 
     def queue_notification(self, title: str, message: str) -> None:
-        with self.lock:
-            self.pending_notifications.append({"title": title, "message": message})
+        # If a dashboard client polled recently, let it deliver the notification
+        # (avoids macOS daemon throttling and duplicates). Otherwise the service
+        # is running headless in the background, so fire the OS notification
+        # directly — this is what lets the user get alerts (e.g. "heavy app
+        # launched / processes suspended") after closing the dashboard.
+        client_active = (time.monotonic() - self.last_client_poll) < self.CLIENT_ACTIVE_WINDOW
+        if client_active:
+            with self.lock:
+                self.pending_notifications.append({"title": title, "message": message})
+        else:
+            try:
+                self._direct_notifier.send(title, message)
+            except Exception as e:
+                log.warning(f"Direct background notification failed: {e}")
 
     def add_log(self, message: str, color: str = ACCENT) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -228,7 +249,11 @@ class OptimizerService:
 
     def handle_request(self, req: dict) -> dict:
         req_type = req.get("type")
-        
+
+        # Any polling request from the dashboard means a client is connected.
+        if req_type in ("get_full_state", "get_update"):
+            self.last_client_poll = time.monotonic()
+
         if req_type == "get_full_state":
             with self.lock:
                 suspended = []
