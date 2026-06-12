@@ -1799,13 +1799,28 @@ def run_app(page: ft.Page) -> None:
         page.window.icon = icon_path
 
 
-    # IPC Client action triggers
+    # IPC Client action triggers — notifications fired from the foreground client
+    # so macOS delivers them instantly (background daemon processes are throttled)
+    def on_boost(_e):
+        resp = client.send_request({"type": "command", "cmd": "boost"})
+        notifier.send(
+            title="🚀 One-Click Boost Activated",
+            message="Memory freed and background processes suspended."
+        )
+
+    def on_undo(_e):
+        resp = client.send_request({"type": "command", "cmd": "undo"})
+        notifier.send(
+            title="↩ Undo: Processes Restored",
+            message="All optimizer-suspended processes have been resumed."
+        )
+
     ui_callbacks = {
-        "on_boost": lambda _e: client.send_request({"type": "command", "cmd": "boost"}),
-        "on_undo": lambda _e: client.send_request({"type": "command", "cmd": "undo"}),
+        "on_boost": on_boost,
+        "on_undo": on_undo,
         "on_autopilot": lambda e: client.send_request({
-            "type": "command", 
-            "cmd": "toggle_autopilot", 
+            "type": "command",
+            "cmd": "toggle_autopilot",
             "value": e.control.value
         })
     }

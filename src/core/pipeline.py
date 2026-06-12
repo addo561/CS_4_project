@@ -448,13 +448,17 @@ class Pipeline:
 
     def trigger_undo(self) -> ActionResult:
         result = self._action.undo()
-        if result.action_taken:
-            self._notifier.notify_resume(result.affected_names)
+        # Notification fired from the foreground dashboard client instead
+        # (background daemon notifications are throttled by macOS)
+        # if result.action_taken:
+        #     self._notifier.notify_resume(result.affected_names)
         return result
 
     def trigger_boost(self) -> ActionResult:
         result = self._action.boost()
-        self._notifier.notify_boost()
+        # Notification fired from the foreground dashboard client instead
+        # (background daemon notifications are throttled by macOS)
+        # self._notifier.notify_boost()
         return result
 
     def get_suspended_processes(self):
