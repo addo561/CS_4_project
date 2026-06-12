@@ -2231,8 +2231,14 @@ def run_app(page: ft.Page) -> None:
     # IMPORTANT: closing the dashboard must NOT stop the background optimizer
     # service — the service runs as a detached process and keeps optimizing.
     def on_window_event(e):
-        log.info(f"Window event received: {e.data}")
-        if e.data in ("close", "destroy", "quit", "exit", "window_close"):
+        # Flet 0.85+ delivers the event kind on e.type (a WindowEventType enum,
+        # e.g. WindowEventType.CLOSE whose .value is "close"), and e.data is
+        # always None. Older Flet builds put the string in e.data. Support both
+        # so the close branch actually fires — otherwise prevent_close keeps the
+        # window open forever and the app cannot be closed.
+        evt = getattr(getattr(e, "type", None), "value", None) or getattr(e, "data", None)
+        log.info(f"Window event received: {evt}")
+        if evt in ("close", "destroy", "quit", "exit", "window_close"):
             if getattr(page, "_closing_in_progress", False):
                 return
 

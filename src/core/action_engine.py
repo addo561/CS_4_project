@@ -82,7 +82,7 @@ class ActionEngine:
     }
 
     _PROTECTIVE_LIST = {
-        "cursor", "code", "vscode", "antigravity", "electron", "terminal", "iterm", "warp",
+        "claude", "claude code", "claude helper", "cursor", "code", "vscode", "antigravity", "electron", "terminal", "iterm", "warp",
         "alacritty", "kitty", "hyper",
         "bash", "zsh", "sh", "fish", "powershell", "cmd", "node", "npm", "yarn", "pnpm",
         "cargo", "rustc", "go", "java", "javac", "ruby", "perl", "git", "docker", "xcode",
@@ -381,6 +381,12 @@ class ActionEngine:
             
             # NEVER throttle flet GUI or our own compiler executables by pattern matching name
             if "flet" in name or "optimizer" in name or "systemresource" in name or "antigravity" in name:
+                return False
+
+            # NEVER throttle Claude / Claude Code and its helper subprocesses
+            # (e.g. "claude", "claude helper (renderer)", "claude helper (gpu)").
+            # Substring match because the helpers don't match the exact list.
+            if "claude" in name:
                 return False
             
             # Check user defined whitelist (cached or loaded on-the-fly)
