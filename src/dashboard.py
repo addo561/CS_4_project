@@ -2200,7 +2200,7 @@ def run_app(page: ft.Page) -> None:
                         body_text(f"[{ts}] {msg}", size=11, color=color, font_family="monospace")
                     )
 
-                overlay_host.visible = False
+                    overlay_host.visible = False
                 else:
                     client.connected = False
                     overlay_host.visible = True
