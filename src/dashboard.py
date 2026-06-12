@@ -19,13 +19,25 @@ from typing import Callable, Optional
 
 import flet as ft
 import flet.canvas as cv
+import logging
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 if _DIR not in sys.path:
     sys.path.insert(0, _DIR)
 
-from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC, VERSION, PROFILES, IPC_PORT, BASE_DIR
+from config import CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, POLL_INTERVAL_SEC, VERSION, PROFILES, IPC_PORT, BASE_DIR, LOG_DIR
 from core.notifier import Notifier
+
+# Configure client-side logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(os.path.join(LOG_DIR, "dashboard.log"), encoding="utf-8")
+    ]
+)
+log = logging.getLogger("dashboard")
 
 notifier = Notifier()
 
@@ -2019,6 +2031,13 @@ def run_app(page: ft.Page) -> None:
                 if client.connect():
                     log_resp = client.send_request({"type": "get_full_state"})
                     if log_resp.get("connected"):
+                        # Process pending notifications from the background daemon
+                        for notif in log_resp.get("pending_notifications", []):
+                            try:
+                                notifier.send(title=notif["title"], message=notif["message"])
+                            except Exception:
+                                pass
+
                         # Reconnected successfully! Populate history charts
                         first_connect = False
                         service_start_attempted = False
@@ -2074,6 +2093,12 @@ def run_app(page: ft.Page) -> None:
             # Connected - poll updates
             resp = client.send_request({"type": "get_update"})
             if resp.get("connected"):
+                # Process pending notifications from the background daemon
+                for notif in resp.get("pending_notifications", []):
+                    try:
+                        notifier.send(title=notif["title"], message=notif["message"])
+                    except Exception:
+                        pass
                 optimizer_active = resp.get("optimizer_active", True)
                 if not optimizer_active:
                     ui.gauge_ring.value = 0.0

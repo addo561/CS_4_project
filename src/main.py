@@ -2304,6 +2304,14 @@ def run_app(page: ft.Page) -> None:
         if not pipeline:
             return
         r = pipeline.trigger_boost()
+        if getattr(pipeline, "_notifier", None):
+            try:
+                pipeline._notifier.send(
+                    title="🚀 One-Click Boost Activated",
+                    message="Memory freed and background processes suspended."
+                )
+            except Exception:
+                pass
         log(f"Boost: {r.message}")
         snack(f"Boost: {r.message}")
         refresh_suspended()
@@ -2313,6 +2321,14 @@ def run_app(page: ft.Page) -> None:
         if not pipeline:
             return
         r = pipeline.trigger_undo()
+        if getattr(pipeline, "_notifier", None):
+            try:
+                pipeline._notifier.send(
+                    title="↩ Undo: Processes Restored",
+                    message="All optimizer-suspended processes have been resumed."
+                )
+            except Exception:
+                pass
         log(f"Undo: {r.message}", MUTED)
         snack(r.message, MUTED)
         refresh_suspended()

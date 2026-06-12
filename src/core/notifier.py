@@ -39,23 +39,37 @@ def _send_macos(title: str, message: str):
     # (macOS silently replaces notifications with identical title+message)
     _uid = int(_time.time() * 1000) % 100000
     
+    # Append event ID to message body to guarantee uniqueness in the eyes of macOS Notification Center
+    message_unique = f"{message} (#{_uid})"
+    
     script = (
-        f'display notification "{message}" '
+        f'display notification "{message_unique}" '
         f'with title "{title}" '
         f'subtitle "Event ID: {_uid}" '
         f'sound name "Blow"'
     )
     
     try:
-        subprocess.Popen(
+        # Run osascript and capture stdout/stderr to diagnose any silent failures
+        proc = subprocess.Popen(
             ["osascript", "-e", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,   # fully detach from parent process
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
             close_fds=True,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=1.0)
+            if proc.returncode != 0:
+                log.warning(f"osascript notification failed with code {proc.returncode}. stderr: {stderr.strip()}")
+            else:
+                log.info(f"osascript notification sent successfully: {title}")
+        except subprocess.TimeoutExpired:
+            # If it takes longer than 1 second, let it continue in background
+            log.info(f"osascript notification pending background delivery: {title}")
     except Exception as exc:
-        log.warning(f"osascript notification failed: {exc}")
+        log.warning(f"osascript notification execution failed: {exc}")
 
 
 def _send_windows(title: str, message: str, timeout: int):
@@ -86,9 +100,17 @@ class Notifier:
     def __init__(self):
         # Callback hook: set by MainWindow to also show a tray bubble
         self.on_notify = None   # Optional[Callable[[str, str], None]]
+        self.queue_callback = None  # Optional[Callable[[str, str], None]]
 
     def send(self, title: str, message: str, timeout: int = 6):
         """Fire notification asynchronously so it never blocks the UI."""
+        if self.queue_callback:
+            try:
+                self.queue_callback(title, message)
+            except Exception:
+                pass
+            return
+
         # Call the in-app tray bubble immediately (on whatever thread calls this)
         if self.on_notify:
             try:
@@ -106,6 +128,13 @@ class Notifier:
 
     def send_sync(self, title: str, message: str, timeout: int = 6):
         """Fire notification synchronously to ensure it delivers before process exit."""
+        if self.queue_callback:
+            try:
+                self.queue_callback(title, message)
+            except Exception:
+                pass
+            return
+
         if self.on_notify:
             try:
                 self.on_notify(title, message)

@@ -77,9 +77,16 @@ class OptimizerService:
         self.scanner_thread: Optional[threading.Thread] = None
         self.server_socket = None
         self.server_thread = None
+        
+        # Pending notifications queue for client delivery
+        self.pending_notifications = []
 
         # Add startup log entry
         self.add_log("Optimizer background service initialized", ACCENT)
+
+    def queue_notification(self, title: str, message: str) -> None:
+        with self.lock:
+            self.pending_notifications.append({"title": title, "message": message})
 
     def add_log(self, message: str, color: str = ACCENT) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -232,6 +239,11 @@ class OptimizerService:
                             "suspended_at": sp.suspended_at
                         })
                 optimizer_active = bool(self.pipeline and self.pipeline._thread and self.pipeline._thread.is_alive())
+                
+                # Fetch and clear pending notifications
+                notifs = list(self.pending_notifications)
+                self.pending_notifications.clear()
+                
                 return {
                     "connected": True,
                     "calibrating": self.calibrating,
@@ -242,7 +254,8 @@ class OptimizerService:
                     "logs": list(self.recent_logs),
                     "history": list(self.history),
                     "suspended_processes": suspended,
-                    "top_processes": self.top_processes
+                    "top_processes": self.top_processes,
+                    "pending_notifications": notifs
                 }
                 
         elif req_type == "get_update":
@@ -255,6 +268,11 @@ class OptimizerService:
                             "suspended_at": sp.suspended_at
                         })
                 optimizer_active = bool(self.pipeline and self.pipeline._thread and self.pipeline._thread.is_alive())
+                
+                # Fetch and clear pending notifications
+                notifs = list(self.pending_notifications)
+                self.pending_notifications.clear()
+                
                 return {
                     "connected": True,
                     "calibrating": self.calibrating,
@@ -265,7 +283,8 @@ class OptimizerService:
                     "logs": list(self.recent_logs),
                     "latest_result": self.last_result,
                     "suspended_processes": suspended,
-                    "top_processes": self.top_processes
+                    "top_processes": self.top_processes,
+                    "pending_notifications": notifs
                 }
                 
         elif req_type == "command":
@@ -377,6 +396,8 @@ class OptimizerService:
             on_result=self.on_pipeline_result,
             on_calibration_progress=self.on_calibration_progress
         )
+        if hasattr(self.pipeline, "_notifier") and self.pipeline._notifier:
+            self.pipeline._notifier.queue_callback = self.queue_notification
         self.pipeline.start()
         
         # Start socket server
