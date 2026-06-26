@@ -14,6 +14,7 @@ from typing import Optional
 import psutil
 
 from config import PROCESS_WHITELIST, UNDO_TIMEOUT_SEC, CONFIDENCE_THRESHOLD
+from core.process_names import friendly_name
 
 log = logging.getLogger("action_engine")
 
@@ -26,9 +27,10 @@ log = logging.getLogger("action_engine")
 class SuspendedProcess:
     """Record of a process that was mitigated by the action engine."""
     pid:               int
-    name:              str
+    name:              str            # raw process name (used for whitelist logic)
     suspended_at:      float          # monotonic timestamp
     reason:            str
+    display_name:      str = ""       # friendly app name for UI / notifications
     auto_resume:       bool = True    # resume after UNDO_TIMEOUT_SEC if not manually undone
     original_affinity: list = field(default_factory=list)
     original_nice:     Optional[int] = None
@@ -180,7 +182,7 @@ class ActionEngine:
             if self._suspend_process(proc, reason):
                 suspended_pids.append(proc.pid)
                 try:
-                    suspended_names.append(proc.name())
+                    suspended_names.append(friendly_name(proc.pid, proc.name()))
                 except Exception:
                     suspended_names.append(str(proc.pid))
 
@@ -205,7 +207,7 @@ class ActionEngine:
             for pid, record in list(self._suspended.items()):
                 if self._resume_process(pid):
                     resumed_pids.append(pid)
-                    resumed_names.append(record.name)
+                    resumed_names.append(record.display_name or record.name)
 
         return ActionResult(
             action_taken   = True,
@@ -245,7 +247,7 @@ class ActionEngine:
         for proc in targets:
             if self._suspend_process(proc, "Manual One-Click Boost"):
                 try:
-                    name = proc.name()
+                    name = friendly_name(proc.pid, proc.name())
                 except Exception:
                     name = str(proc.pid)
                 all_pids.append(proc.pid)
@@ -490,6 +492,7 @@ class ActionEngine:
                 self._suspended[pid] = SuspendedProcess(
                     pid               = pid,
                     name              = f"{name} ({mem_str})",
+                    display_name      = f"{friendly_name(pid, name)} ({mem_str})",
                     suspended_at      = time.monotonic(),
                     reason            = reason,
                 )

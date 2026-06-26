@@ -24,6 +24,7 @@ if _DIR not in sys.path:
 
 from core.pipeline import Pipeline, PipelineResult
 from core.notifier import Notifier
+from core.process_names import friendly_name
 from config import (
     CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, PROFILES,
     load_user_settings, save_user_settings,
@@ -183,10 +184,16 @@ class OptimizerService:
                             procs.append(p.info)
                     except (psutil.Error, KeyError):
                         continue
-                
+
                 procs.sort(key=lambda x: x["memory_percent"], reverse=True)
+                top = procs[:20]
+                # Resolve friendly display names only for the top 20 (keeps cost low,
+                # leaves raw "name" intact for whitelist matching).
+                for info in top:
+                    info["display_name"] = friendly_name(
+                        info.get("pid"), info.get("name"))
                 with self.lock:
-                    self.top_processes = procs[:20]
+                    self.top_processes = top
             except Exception as e:
                 log.error(f"Error scanning processes: {e}")
             
@@ -261,6 +268,8 @@ class OptimizerService:
                     for sp in self.pipeline.get_suspended_processes():
                         suspended.append({
                             "name": sp.name,
+                            "display_name": getattr(sp, "display_name", "")
+                                            or friendly_name(sp.pid, sp.name),
                             "suspended_at": sp.suspended_at
                         })
                 optimizer_active = bool(self.pipeline and self.pipeline._thread and self.pipeline._thread.is_alive())
@@ -290,6 +299,8 @@ class OptimizerService:
                     for sp in self.pipeline.get_suspended_processes():
                         suspended.append({
                             "name": sp.name,
+                            "display_name": getattr(sp, "display_name", "")
+                                            or friendly_name(sp.pid, sp.name),
                             "suspended_at": sp.suspended_at
                         })
                 optimizer_active = bool(self.pipeline and self.pipeline._thread and self.pipeline._thread.is_alive())

@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 ROOT = os.path.dirname(os.path.abspath(SPEC))   # Final_year/
 
 # Read version dynamically from version.txt if it exists
-APP_VERSION = "2.10.0"
+APP_VERSION = "3.0.0"
 version_file = os.path.join(ROOT, "src", "assets", "version.txt")
 if os.path.isfile(version_file):
     try:
@@ -39,7 +39,7 @@ added_files += collect_data_files("flet-desktop")
 # ── Hidden imports PyInstaller misses ─────────────────────────────────────────
 hidden = [
     # Our own modules
-    "core.pipeline", "core.action_engine", "core.notifier", "config",
+    "core.pipeline", "core.action_engine", "core.notifier", "core.process_names", "config",
     # psutil
     "psutil",
     # onnxruntime

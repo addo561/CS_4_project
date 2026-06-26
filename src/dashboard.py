@@ -883,7 +883,8 @@ def main(page: ft.Page):
         susp_txt.value = f"{len(susp)} suspended"
 
         top = resp.get("top_processes", [])
-        proc_list.controls = [proc_row(p.get("name", "—"), p.get("memory_percent", 0) or 0)
+        proc_list.controls = [proc_row(p.get("display_name") or p.get("name", "—"),
+                                       p.get("memory_percent", 0) or 0)
                               for p in top[:8]]
         clock.value = time.strftime("%H:%M:%S")
 
