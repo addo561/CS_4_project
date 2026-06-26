@@ -115,6 +115,9 @@ class TestSafetyAndNotifications(unittest.TestCase):
         proc_safe = MockProcess(pid=9999, name="heavy_game")
         self.assertTrue(engine._is_safe_to_suspend(proc_safe, user_whitelist_lower=set()))
 
+    @unittest.skipUnless(
+        sys.platform in ("darwin", "win32"),
+        "foreground-app detection is only implemented on macOS/Windows")
     @patch('psutil.process_iter')
     def test_foreground_protection(self, mock_process_iter):
         engine = ActionEngine()
