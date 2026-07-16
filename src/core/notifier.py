@@ -1,7 +1,7 @@
 # =============================================================================
 # notifier.py — Cross-platform desktop notifications
 # macOS  → osascript (built-in, zero deps, always works)
-# Windows → plyer toast (falls back silently if unavailable)
+# Windows → winotify native toast (falls back silently if unavailable)
 # =============================================================================
 
 import logging
@@ -16,14 +16,14 @@ log = logging.getLogger("notifier")
 _OS = platform.system()          # "Darwin" | "Windows" | "Linux"
 APP_NAME = "System Resource Optimizer"
 
-# ── Windows: try plyer ────────────────────────────────────────────────────────
-_PLYER_OK = False
+# ── Windows: try winotify ─────────────────────────────────────────────────────
+_WINOTIFY_OK = False
 if _OS == "Windows":
     try:
-        from plyer import notification as _plyer_notification
-        _PLYER_OK = True
+        from winotify import Notification as WinNotification
+        _WINOTIFY_OK = True
     except ImportError:
-        log.warning("plyer not installed — Windows toasts disabled.")
+        log.warning("winotify not installed — Windows toasts disabled.")
 
 
 from config import BASE_DIR
@@ -73,28 +73,30 @@ def _send_macos(title: str, message: str):
 
 
 def _send_windows(title: str, message: str, timeout: int):
-    if not _PLYER_OK:
+    if not _WINOTIFY_OK:
         return
     try:
         icon_path = os.path.join(BASE_DIR, "assets", "icon.ico")
         if not os.path.exists(icon_path):
             icon_path = None
-        _plyer_notification.notify(
-            app_name=APP_NAME,
+        else:
+            icon_path = os.path.abspath(icon_path)
+        toast = WinNotification(
+            app_id=APP_NAME,
             title=title,
-            message=message,
-            timeout=timeout,
-            app_icon=icon_path,
+            msg=message,
+            icon=icon_path
         )
+        toast.show()
     except Exception as exc:
-        log.warning(f"Windows toast failed: {exc}")
+        log.warning(f"Windows native toast failed: {exc}")
 
 
 class Notifier:
     """
     Non-blocking cross-platform notifications.
     macOS  → native osascript (zero deps).
-    Windows → plyer toast.
+    Windows → winotify native toast.
     """
 
     def __init__(self):

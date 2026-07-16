@@ -1,10 +1,10 @@
-name: Build Desktop Apps (v3.0)
+name: Build Desktop Apps (v3.1)
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CI / CD pipeline v3.0 for the System Resource Optimizer
+#  CI / CD pipeline v3.1 for the System Resource Optimizer
 #    • test       — runs on every push / PR (compile checks + safety test suite)
 #    • build-*    — build macOS .dmg and Windows .exe (after tests pass)
-#    • release    — publish a GitHub Release on version tags (e.g. v3.0.0)
+#    • release    — publish a GitHub Release on version tags (e.g. v3.1.0)
 # ─────────────────────────────────────────────────────────────────────────────
 on:
   push:
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:        # allow manual trigger from the GitHub UI
 
 env:
-  DEFAULT_VERSION: "v3.0.0"
+  DEFAULT_VERSION: "v3.1.0"
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ jobs:
           retention-days: 30
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 4) Release — only on version tags (git tag v3.0.0 && git push origin v3.0.0)
+  # 4) Release — only on version tags (git tag v3.1.0 && git push origin v3.1.0)
   # ───────────────────────────────────────────────────────────────────────────
   release:
     name: Publish GitHub Release

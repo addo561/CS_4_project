@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 ROOT = os.path.dirname(os.path.abspath(SPEC))   # Final_year/
 
 # Read version dynamically from version.txt if it exists
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 version_file = os.path.join(ROOT, "src", "assets", "version.txt")
 if os.path.isfile(version_file):
     try:
@@ -47,8 +47,10 @@ hidden = [
     # sklearn
     "sklearn", "sklearn.utils._cython_blas", "sklearn.neighbors.typedefs", 
     "sklearn.neighbors.quad_tree", "sklearn.tree._utils",
+    # winotify
+    "winotify",
     # plyer
-    "plyer", "plyer.platforms.win.notification", "plyer.platforms.macosx.notification",
+    "plyer", "plyer.platforms.macosx.notification",
 ]
 hidden += collect_submodules("flet")
 hidden += collect_submodules("flet-desktop")

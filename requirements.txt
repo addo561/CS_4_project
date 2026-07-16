@@ -27,3 +27,4 @@ flet-desktop>=0.22.0
 
 # ── Desktop notifications (optional — app runs fine without it) ──
 plyer>=2.1.0
+winotify>=1.1.0
