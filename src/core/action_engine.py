@@ -471,6 +471,13 @@ class ActionEngine:
         
         PROCESS_SUSPEND_RESUME = 0x0800
         kernel32 = ctypes.windll.kernel32
+        
+        # Configure ctypes signatures to prevent handle truncation on 64-bit systems
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        
         handle = kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
         if not handle:
             log.warning(f"Windows OpenProcess failed for PID {pid} (suspend)")
@@ -498,6 +505,13 @@ class ActionEngine:
         
         PROCESS_SUSPEND_RESUME = 0x0800
         kernel32 = ctypes.windll.kernel32
+        
+        # Configure ctypes signatures to prevent handle truncation on 64-bit systems
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        
         handle = kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
         if not handle:
             log.warning(f"Windows OpenProcess failed for PID {pid} (resume)")
