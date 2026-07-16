@@ -193,6 +193,42 @@ class TestSafetyAndNotifications(unittest.TestCase):
         self.assertFalse(engine._is_safe_to_suspend(proc_parent, user_whitelist_lower=set()))
         self.assertFalse(engine._is_safe_to_suspend(proc_grandparent, user_whitelist_lower=set()))
 
+    @patch('sys.platform', 'win32')
+    @patch('ctypes.windll', create=True)
+    @patch('ctypes.WinDLL', create=True)
+    def test_windows_process_control(self, mock_windll_class, mock_windll_obj):
+        engine = ActionEngine()
+        
+        # Setup mocks
+        mock_kernel32 = MagicMock()
+        mock_windll_obj.kernel32 = mock_kernel32
+        mock_kernel32.OpenProcess.return_value = 12345
+        
+        mock_ntdll = MagicMock()
+        mock_windll_class.return_value = mock_ntdll
+        
+        # Test suspend success (status = 0)
+        mock_ntdll.NtSuspendProcess.return_value = 0
+        self.assertTrue(engine._windows_suspend_process(9999))
+        mock_kernel32.OpenProcess.assert_called_with(0x0800, False, 9999)
+        mock_ntdll.NtSuspendProcess.assert_called_once()
+        mock_kernel32.CloseHandle.assert_called_with(12345)
+        
+        # Test suspend failure (status != 0)
+        mock_ntdll.NtSuspendProcess.reset_mock()
+        mock_ntdll.NtSuspendProcess.return_value = 1
+        self.assertFalse(engine._windows_suspend_process(9999))
+        
+        # Test resume success (status = 0)
+        mock_ntdll.NtResumeProcess.return_value = 0
+        self.assertTrue(engine._windows_resume_process(9999))
+        mock_ntdll.NtResumeProcess.assert_called_once()
+        
+        # Test resume failure (status != 0)
+        mock_ntdll.NtResumeProcess.reset_mock()
+        mock_ntdll.NtResumeProcess.return_value = -1
+        self.assertFalse(engine._windows_resume_process(9999))
+
     def test_notification_checks(self):
         dashboard_ok, dashboard_msg = check_dashboard_notifications()
         self.assertTrue(dashboard_ok, dashboard_msg)

@@ -464,8 +464,62 @@ class ActionEngine:
         candidates.sort(key=lambda x: x[0], reverse=True)
         return [proc for _, proc in candidates[:max_targets]]
 
+    def _windows_suspend_process(self, pid: int) -> bool:
+        """Suspends a process using native Windows API NtSuspendProcess."""
+        import ctypes
+        from ctypes import wintypes
+        
+        PROCESS_SUSPEND_RESUME = 0x0800
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
+        if not handle:
+            log.warning(f"Windows OpenProcess failed for PID {pid} (suspend)")
+            return False
+        try:
+            ntdll = ctypes.WinDLL("ntdll.dll")
+            ntdll.NtSuspendProcess.argtypes = (wintypes.HANDLE,)
+            ntdll.NtSuspendProcess.restype = wintypes.LONG
+            status = ntdll.NtSuspendProcess(handle)
+            if status == 0:
+                return True
+            else:
+                log.warning(f"NtSuspendProcess returned status code {status} for PID {pid}")
+                return False
+        except Exception as e:
+            log.warning(f"NtSuspendProcess exception for PID {pid}: {e}")
+            return False
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _windows_resume_process(self, pid: int) -> bool:
+        """Resumes a process using native Windows API NtResumeProcess."""
+        import ctypes
+        from ctypes import wintypes
+        
+        PROCESS_SUSPEND_RESUME = 0x0800
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
+        if not handle:
+            log.warning(f"Windows OpenProcess failed for PID {pid} (resume)")
+            return False
+        try:
+            ntdll = ctypes.WinDLL("ntdll.dll")
+            ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+            ntdll.NtResumeProcess.restype = wintypes.LONG
+            status = ntdll.NtResumeProcess(handle)
+            if status == 0:
+                return True
+            else:
+                log.warning(f"NtResumeProcess returned status code {status} for PID {pid}")
+                return False
+        except Exception as e:
+            log.warning(f"NtResumeProcess exception for PID {pid}: {e}")
+            return False
+        finally:
+            kernel32.CloseHandle(handle)
+
     def _suspend_process(self, proc: psutil.Process, reason: str) -> bool:
-        """Suspends a process using psutil.Process.suspend() for absolute resource mitigation."""
+        """Suspends a process using psutil.Process.suspend() or Win32 API for absolute resource mitigation."""
         try:
             name = proc.name()
             pid = proc.pid
@@ -488,7 +542,16 @@ class ActionEngine:
             
             # Perform actual kernel-level suspension
             with self._lock:
-                proc.suspend()
+                suspended_via_win32 = False
+                if sys.platform == "win32":
+                    try:
+                        suspended_via_win32 = self._windows_suspend_process(pid)
+                    except Exception as e:
+                        log.warning("Exception in _windows_suspend_process: %s", e)
+                
+                if not suspended_via_win32:
+                    proc.suspend()
+
                 self._suspended[pid] = SuspendedProcess(
                     pid               = pid,
                     name              = f"{name} ({mem_str})",
@@ -496,32 +559,40 @@ class ActionEngine:
                     suspended_at      = time.monotonic(),
                     reason            = reason,
                 )
-            log.info("Successfully suspended PID %d (%s) using %s", pid, name, mem_str)
+            log.info("Successfully suspended PID %d (%s) using %s (win32_api=%s)", pid, name, mem_str, suspended_via_win32)
             return True
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
             log.warning("Could not suspend PID %d: %s", proc.pid, exc)
             return False
 
     def _resume_process(self, pid: int) -> bool:
-        """Resumes a suspended process using psutil.Process.resume()."""
-        try:
-            record = self._suspended.get(pid)
-            if not record:
-                log.warning(f"No suspension record found for PID {pid}")
-                return False
-                
-            proc = psutil.Process(pid)
-            name = proc.name()
-            log.info(f"Resuming process: {name} (PID {pid})")
+        """Resumes a suspended process using psutil.Process.resume() or Win32 API."""
+        record = self._suspended.get(pid)
+        if not record:
+            log.warning(f"No suspension record found for PID {pid}")
+            return False
             
+        name = record.name
+        log.info(f"Resuming process: {name} (PID {pid})")
+        
+        try:
             # Perform actual kernel-level resumption
-            proc.resume()
+            resumed_via_win32 = False
+            if sys.platform == "win32":
+                try:
+                    resumed_via_win32 = self._windows_resume_process(pid)
+                except Exception as e:
+                    log.warning("Exception in _windows_resume_process: %s", e)
+
+            if not resumed_via_win32:
+                proc = psutil.Process(pid)
+                proc.resume()
 
             self._suspended.pop(pid, None)
-            log.info("Successfully resumed PID %d", pid)
+            log.info("Successfully resumed PID %d (win32_api=%s)", pid, resumed_via_win32)
             return True
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-            log.warning("Could not resume PID %d: %s", pid, exc)
+            log.warning("Could not resume PID %d (%s): %s", pid, name, exc)
             self._suspended.pop(pid, None)
             return False
 
