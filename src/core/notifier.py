@@ -22,8 +22,8 @@ if _OS == "Windows":
     try:
         from winotify import Notification as WinNotification
         _WINOTIFY_OK = True
-    except ImportError:
-        log.warning("winotify not installed — Windows toasts disabled.")
+    except Exception:
+        log.warning("winotify not available — Windows toasts disabled.")
 
 
 from config import BASE_DIR

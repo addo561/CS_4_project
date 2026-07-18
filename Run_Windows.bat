@@ -52,7 +52,12 @@ if errorlevel 1 (
 
 REM Run the app
 echo Launching System Resource Optimizer background service...
-start "" pythonw src\optimizer_service.py
+WHERE pythonw >nul 2>&1
+IF %ERRORLEVEL% EQU 0 (
+    start "" pythonw src\optimizer_service.py
+) ELSE (
+    start "" python src\optimizer_service.py
+)
 
 echo Launching Dashboard UI...
 python src\dashboard.py

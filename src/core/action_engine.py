@@ -466,71 +466,79 @@ class ActionEngine:
 
     def _windows_suspend_process(self, pid: int) -> bool:
         """Suspends a process using native Windows API NtSuspendProcess."""
-        import ctypes
-        from ctypes import wintypes
-        
-        PROCESS_SUSPEND_RESUME = 0x0800
-        kernel32 = ctypes.windll.kernel32
-        
-        # Configure ctypes signatures to prevent handle truncation on 64-bit systems
-        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-        kernel32.CloseHandle.restype = wintypes.BOOL
-        
-        handle = kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
-        if not handle:
-            log.warning(f"Windows OpenProcess failed for PID {pid} (suspend)")
-            return False
         try:
-            ntdll = ctypes.WinDLL("ntdll.dll")
-            ntdll.NtSuspendProcess.argtypes = (wintypes.HANDLE,)
-            ntdll.NtSuspendProcess.restype = wintypes.LONG
-            status = ntdll.NtSuspendProcess(handle)
-            if status == 0:
-                return True
-            else:
-                log.warning(f"NtSuspendProcess returned status code {status} for PID {pid}")
+            import ctypes
+            from ctypes import wintypes
+            
+            PROCESS_SUSPEND_RESUME = 0x0800
+            windll = getattr(ctypes, "windll", None)
+            if not windll:
                 return False
+            kernel32 = windll.kernel32
+            
+            # Configure ctypes signatures to prevent handle truncation on 64-bit systems
+            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            
+            handle = kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
+            if not handle:
+                log.warning(f"Windows OpenProcess failed for PID {pid} (suspend)")
+                return False
+            try:
+                ntdll = ctypes.WinDLL("ntdll.dll")
+                ntdll.NtSuspendProcess.argtypes = (wintypes.HANDLE,)
+                ntdll.NtSuspendProcess.restype = wintypes.LONG
+                status = ntdll.NtSuspendProcess(handle)
+                if status == 0:
+                    return True
+                else:
+                    log.warning(f"NtSuspendProcess returned status code {status} for PID {pid}")
+                    return False
+            finally:
+                kernel32.CloseHandle(handle)
         except Exception as e:
             log.warning(f"NtSuspendProcess exception for PID {pid}: {e}")
             return False
-        finally:
-            kernel32.CloseHandle(handle)
 
     def _windows_resume_process(self, pid: int) -> bool:
         """Resumes a process using native Windows API NtResumeProcess."""
-        import ctypes
-        from ctypes import wintypes
-        
-        PROCESS_SUSPEND_RESUME = 0x0800
-        kernel32 = ctypes.windll.kernel32
-        
-        # Configure ctypes signatures to prevent handle truncation on 64-bit systems
-        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-        kernel32.CloseHandle.restype = wintypes.BOOL
-        
-        handle = kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
-        if not handle:
-            log.warning(f"Windows OpenProcess failed for PID {pid} (resume)")
-            return False
         try:
-            ntdll = ctypes.WinDLL("ntdll.dll")
-            ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
-            ntdll.NtResumeProcess.restype = wintypes.LONG
-            status = ntdll.NtResumeProcess(handle)
-            if status == 0:
-                return True
-            else:
-                log.warning(f"NtResumeProcess returned status code {status} for PID {pid}")
+            import ctypes
+            from ctypes import wintypes
+            
+            PROCESS_SUSPEND_RESUME = 0x0800
+            windll = getattr(ctypes, "windll", None)
+            if not windll:
                 return False
+            kernel32 = windll.kernel32
+            
+            # Configure ctypes signatures to prevent handle truncation on 64-bit systems
+            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            
+            handle = kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
+            if not handle:
+                log.warning(f"Windows OpenProcess failed for PID {pid} (resume)")
+                return False
+            try:
+                ntdll = ctypes.WinDLL("ntdll.dll")
+                ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+                ntdll.NtResumeProcess.restype = wintypes.LONG
+                status = ntdll.NtResumeProcess(handle)
+                if status == 0:
+                    return True
+                else:
+                    log.warning(f"NtResumeProcess returned status code {status} for PID {pid}")
+                    return False
+            finally:
+                kernel32.CloseHandle(handle)
         except Exception as e:
             log.warning(f"NtResumeProcess exception for PID {pid}: {e}")
             return False
-        finally:
-            kernel32.CloseHandle(handle)
 
     def _suspend_process(self, proc: psutil.Process, reason: str) -> bool:
         """Suspends a process using psutil.Process.suspend() or Win32 API for absolute resource mitigation."""

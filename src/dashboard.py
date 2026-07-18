@@ -795,7 +795,8 @@ def main(page: ft.Page):
                 if platform.system() == "Windows":
                     srv = os.path.join(base_dir, "SystemResourceOptimizerService.exe")
                     if os.path.exists(srv):
-                        subprocess.Popen([srv], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                        subprocess.Popen([srv], creationflags=flags)
                 else:
                     srv = os.path.join(base_dir, "SystemResourceOptimizerService")
                     if os.path.exists(srv):
@@ -805,9 +806,11 @@ def main(page: ft.Page):
                 script = os.path.join(_DIR, "optimizer_service.py")
                 if os.path.exists(script):
                     if sys.platform == "win32":
-                        pyw = sys.executable.replace("python.exe", "pythonw.exe")
-                        subprocess.Popen([pyw, script],
-                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | 0x00000008)
+                        import re
+                        pyw = re.sub(r'python\.exe$', 'pythonw.exe', sys.executable, flags=re.IGNORECASE)
+                        py_cmd = pyw if os.path.exists(pyw) else sys.executable
+                        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                        subprocess.Popen([py_cmd, script], creationflags=flags)
                     else:
                         subprocess.Popen([sys.executable, script], stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL, start_new_session=True)

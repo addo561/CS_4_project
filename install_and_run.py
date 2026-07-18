@@ -144,13 +144,24 @@ service_py = os.path.join(HERE, "src", "optimizer_service.py")
 dashboard_py = os.path.join(HERE, "src", "dashboard.py")
 
 try:
-    subprocess.Popen(
-        [sys.executable, service_py],
-        cwd=HERE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=(OS != "Windows"),
-    )
+    if OS == "Windows":
+        import re
+        pyw = re.sub(r'python\.exe$', 'pythonw.exe', sys.executable, flags=re.IGNORECASE)
+        py_cmd = pyw if os.path.exists(pyw) else sys.executable
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        subprocess.Popen(
+            [py_cmd, service_py],
+            cwd=HERE,
+            creationflags=flags,
+        )
+    else:
+        subprocess.Popen(
+            [sys.executable, service_py],
+            cwd=HERE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
     subprocess.Popen(
         [sys.executable, dashboard_py],
         cwd=HERE,
