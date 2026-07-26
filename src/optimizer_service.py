@@ -177,12 +177,18 @@ class OptimizerService:
         while not self.stop_event.is_set():
             try:
                 procs = []
-                for p in psutil.process_iter(["pid", "name", "memory_percent", "status"]):
+                total_mem = float(psutil.virtual_memory().total or 1)
+                for p in psutil.process_iter(["pid", "name", "memory_info", "status"]):
                     try:
-                        mem = p.info.get("memory_percent") or 0
-                        if mem > 0.1:
-                            procs.append(p.info)
-                    except (psutil.Error, KeyError):
+                        info = p.info
+                        mem_info = info.get("memory_info")
+                        if mem_info:
+                            mem_pct = (mem_info.rss / total_mem) * 100.0
+                            if mem_pct > 0.1:
+                                item = info.copy()
+                                item["memory_percent"] = mem_pct
+                                procs.append(item)
+                    except (psutil.Error, KeyError, AttributeError):
                         continue
 
                 procs.sort(key=lambda x: x["memory_percent"], reverse=True)

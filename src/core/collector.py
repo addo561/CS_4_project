@@ -83,6 +83,8 @@ def _get_cpu_temp() -> float:
     Returns TEMP_FALLBACK (-1.0) when sensors are unavailable
     (common on VMs, some laptops, and Windows without Open Hardware Monitor).
     """
+    if not hasattr(psutil, "sensors_temperatures"):
+        return TEMP_FALLBACK
     try:
         temps = psutil.sensors_temperatures()
         if not temps:

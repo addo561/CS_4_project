@@ -446,8 +446,7 @@ class ActionEngine:
                 foreground_pid = self._get_windows_foreground_pid()
             
             # Pre-fetch all fields used during safety filters and selection to prevent N+1 queries
-            for proc in psutil.process_iter(["pid", "name", "memory_info", "cpu_percent", 
-                                             "username", "status", "memory_percent", "uids", "ppid"]):
+            for proc in psutil.process_iter(["pid", "name", "memory_info", "status", "ppid", "username"]):
                 try:
                     if not self._is_safe_to_suspend(proc, user_whitelist_lower, foreground_pid):
                         continue

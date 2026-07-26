@@ -44,7 +44,7 @@ def get_app_version() -> str:
                         return f"{ver} (Stable)"
             except Exception:
                 pass
-    return "v3.2.1 (Stable)"
+    return "v3.3.0 (Stable)"
 
 VERSION = get_app_version()
 
@@ -53,18 +53,21 @@ VERSION = get_app_version()
 # works on any machine without touching the bundled model files.
 import pathlib
 
+_LOCAL_SCALER_DIR_CACHE = None
+
 def _get_local_scaler_dir():
     """Get writable directory for local scaler, with fallbacks."""
+    global _LOCAL_SCALER_DIR_CACHE
+    if _LOCAL_SCALER_DIR_CACHE is not None:
+        return _LOCAL_SCALER_DIR_CACHE
+
     # Try 1: ~/.sro_optimizer
     try:
         home_dir = os.path.join(pathlib.Path.home(), ".sro_optimizer")
         os.makedirs(home_dir, exist_ok=True)
-        # Test write access
-        test_file = os.path.join(home_dir, ".test")
-        with open(test_file, 'w') as f:
-            f.write("test")
-        os.remove(test_file)
-        return home_dir
+        if os.access(home_dir, os.W_OK):
+            _LOCAL_SCALER_DIR_CACHE = home_dir
+            return home_dir
     except (OSError, PermissionError):
         pass
     
@@ -72,11 +75,9 @@ def _get_local_scaler_dir():
     try:
         app_local = os.path.join(BASE_DIR, ".sro_optimizer")
         os.makedirs(app_local, exist_ok=True)
-        test_file = os.path.join(app_local, ".test")
-        with open(test_file, 'w') as f:
-            f.write("test")
-        os.remove(test_file)
-        return app_local
+        if os.access(app_local, os.W_OK):
+            _LOCAL_SCALER_DIR_CACHE = app_local
+            return app_local
     except (OSError, PermissionError):
         pass
     
@@ -85,11 +86,11 @@ def _get_local_scaler_dir():
     try:
         temp_dir = os.path.join(tempfile.gettempdir(), ".sro_optimizer")
         os.makedirs(temp_dir, exist_ok=True)
+        _LOCAL_SCALER_DIR_CACHE = temp_dir
         return temp_dir
-    except:
+    except Exception:
         pass
     
-    # Last resort: None (will use CPU/heuristic only or not persist)
     return None
 
 LOCAL_SCALER_DIR = _get_local_scaler_dir()

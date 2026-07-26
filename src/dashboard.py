@@ -99,12 +99,19 @@ class IPCClient:
                 return True
             try:
                 self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.sock.settimeout(3.0)
+                self.sock.settimeout(0.5)
                 self.sock.connect((self.host, self.port))
+                self.sock.settimeout(3.0)
                 self.connected = True
                 return True
             except Exception:
                 self.connected = False
+                if self.sock:
+                    try:
+                        self.sock.close()
+                    except Exception:
+                        pass
+                    self.sock = None
                 return False
 
     def send_request(self, req: dict) -> dict:
@@ -988,15 +995,26 @@ def _set_windows_taskbar_icon_async() -> None:
         import psutil
 
         _t.sleep(0.5)
-        for _ in range(40):
-            try:
-                cur = psutil.Process(_o.getpid())
-                child_pids = {p.pid for p in cur.children(recursive=True)}
-            except Exception:
-                child_pids = set()
-            child_pids.add(_o.getpid())
+        my_pid = _o.getpid()
+        child_pids = {my_pid}
+        try:
+            cur = psutil.Process(my_pid)
+            child_pids.update(p.pid for p in cur.children(recursive=True))
+        except Exception:
+            pass
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        for attempt in range(40):
+            if attempt % 5 == 0 and attempt > 0:
+                try:
+                    cur = psutil.Process(my_pid)
+                    child_pids = {my_pid}
+                    child_pids.update(p.pid for p in cur.children(recursive=True))
+                except Exception:
+                    pass
+
             hwnd_found = [None]
-            WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
             def enum_callback(hwnd, lparam):
                 if ctypes.windll.user32.IsWindowVisible(hwnd):
@@ -1010,7 +1028,8 @@ def _set_windows_taskbar_icon_async() -> None:
                             return False
                 return True
 
-            ctypes.windll.user32.EnumWindows(WNDENUMPROC(enum_callback), 0)
+            cb = WNDENUMPROC(enum_callback)
+            ctypes.windll.user32.EnumWindows(cb, 0)
             if hwnd_found[0] is not None:
                 hwnd = hwnd_found[0]
                 try:
