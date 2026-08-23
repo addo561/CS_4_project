@@ -91,8 +91,12 @@ def check_dashboard_notifications():
         return False, "from core.notifier import Notifier import not found in dashboard.py"
     if "notifier = Notifier()" not in content:
         return False, "notifier = Notifier() instantiation not found in dashboard.py"
-    if "notifier.send(" not in content:
-        return False, "notifier.send() call not found in dashboard.py"
+    # Accept either notifier.send(...) or notifier.send_sync(...). As of v4 the
+    # background service is the single source of per-action native notifications;
+    # the dashboard still uses the notifier for the "service still running" alert
+    # it fires on window close (send_sync).
+    if "notifier.send(" not in content and "notifier.send_sync(" not in content:
+        return False, "no notifier.send()/send_sync() call found in dashboard.py"
     return True, "Dashboard notifications check passed."
 
 
