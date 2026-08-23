@@ -105,16 +105,31 @@ jobs:
 
       - name: Create DMG
         run: |
-          ls -R dist
           cd dist
-          if [ -d "System Resource Optimizer.app" ]; then
-            hdiutil create -volname "System Resource Optimizer" \
-              -srcfolder "System Resource Optimizer.app" \
-              -ov -format UDZO "System_Resource_Optimizer.dmg"
-          else
-            echo "Error: System Resource Optimizer.app not found in dist/"
-            exit 1
+          APP="System Resource Optimizer.app"
+          if [ ! -d "$APP" ]; then
+            echo "Error: $APP not found in dist/"; ls -1; exit 1
           fi
+          # Detach any volume left mounted by a previous attempt.
+          hdiutil detach "/Volumes/System Resource Optimizer" 2>/dev/null || true
+          sync
+          # hdiutil can fail transiently with "Resource busy" when Spotlight is
+          # still indexing the freshly built .app, so retry with a backoff.
+          ok=0
+          for i in 1 2 3 4 5; do
+            if hdiutil create -volname "System Resource Optimizer" \
+                 -srcfolder "$APP" -fs HFS+ \
+                 -ov -format UDZO "System_Resource_Optimizer.dmg"; then
+              echo "DMG created on attempt $i"; ok=1; break
+            fi
+            echo "hdiutil attempt $i failed (Resource busy?); retrying in 15s..."
+            hdiutil detach "/Volumes/System Resource Optimizer" 2>/dev/null || true
+            sync; sleep 15
+          done
+          if [ "$ok" != "1" ]; then
+            echo "Error: DMG creation failed after 5 attempts"; exit 1
+          fi
+          ls -lh System_Resource_Optimizer.dmg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
