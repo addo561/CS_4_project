@@ -9,13 +9,15 @@
 psutil>=5.9.0
 
 # ── Data / ML ────────────────────────────────────────────────────
-numpy>=1.24.0
+# numpy is capped below 2.0: torch 2.2.x is built against the numpy 1.x
+# C-API and fails to initialise ("_ARRAY_API not found") under numpy 2.
+numpy>=1.24.0,<2.0
 pandas>=2.0.0
 scikit-learn>=1.3.0
 
 # ── Deep Learning (GRU model) ────────────────────────────────────
-torch>=2.0.0; platform_machine != 'arm64'
-torchvision>=0.15.0; platform_machine != 'arm64'
+torch>=2.0.0,<2.3; platform_machine != 'arm64'
+torchvision>=0.15.0,<0.18; platform_machine != 'arm64'
 
 # ── ONNX inference ───────────────────────────────────────────────
 onnx>=1.14.0

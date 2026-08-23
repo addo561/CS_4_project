@@ -95,20 +95,15 @@ class OptimizerService:
         self.add_log("Optimizer background service initialized", ACCENT)
 
     def queue_notification(self, title: str, message: str) -> None:
-        # If a dashboard client polled recently, let it deliver the notification
-        # (avoids macOS daemon throttling and duplicates). Otherwise the service
-        # is running headless in the background, so fire the OS notification
-        # directly — this is what lets the user get alerts (e.g. "heavy app
-        # launched / processes suspended") after closing the dashboard.
-        client_active = (time.monotonic() - self.last_client_poll) < self.CLIENT_ACTIVE_WINDOW
-        if client_active:
-            with self.lock:
-                self.pending_notifications.append({"title": title, "message": message})
-        else:
-            try:
-                self._direct_notifier.send(title, message)
-            except Exception as e:
-                log.warning(f"Direct background notification failed: {e}")
+        # Single, reliable source for NATIVE OS notifications — fired directly
+        # from the service whether the dashboard is open or closed. Previously
+        # the service handed delivery to the GUI while a client was polling,
+        # which was subject to macOS per-app throttling and only worked at
+        # startup. Firing here every time gives consistent system notifications.
+        try:
+            self._direct_notifier.send(title, message)
+        except Exception as e:
+            log.warning(f"Native notification failed: {e}")
 
     def add_log(self, message: str, color: str = ACCENT) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -352,6 +347,11 @@ class OptimizerService:
                 settings["autopilot"] = val
                 save_user_settings(settings)
                 self.add_log(f"Auto-Pilot {'Activated' if val else 'Deactivated'}", WARN if val else MUTED)
+                self.queue_notification(
+                    title=f"🤖 SRO: Auto-Pilot {'Enabled' if val else 'Disabled'}",
+                    message=("Optimizer will now act automatically on predicted bottlenecks."
+                             if val else "Automatic mitigation is off — you're in manual control."),
+                )
                 return {"status": "ok"}
                 
             elif cmd == "toggle_optimizer":
@@ -384,6 +384,11 @@ class OptimizerService:
                 settings["profile"] = val
                 save_user_settings(settings)
                 self.add_log(f"Performance Profile set to: {val}", ACCENT)
+                thr = PROFILES.get(val, PROFILES["Balanced"]).get("CONFIDENCE_THRESHOLD", 0.8)
+                self.queue_notification(
+                    title=f"🎛 SRO: {val} Profile",
+                    message=f"Switched to {val} — acts at {int(thr * 100)}% bottleneck confidence.",
+                )
                 return {"status": "ok"}
                 
             elif cmd == "get_whitelist":

@@ -93,6 +93,7 @@ class InferenceEngine:
         self._session      = None
         self._input_name   = None
         self._output_names = None
+        self._n_features   = None     # feature width the ONNX graph expects (F)
         self._scaler       = scaler   # used for proper inverse_transform
         self._load(model_path)
 
@@ -111,7 +112,12 @@ class InferenceEngine:
             self._session      = ort.InferenceSession(model_path, sess_options=opts)
             self._input_name   = self._session.get_inputs()[0].name
             self._output_names = [o.name for o in self._session.get_outputs()]
-            log.info(f"ONNX model loaded from '{model_path}'")
+            # Remember the feature width baked into the graph (…, WINDOW_SIZE, F).
+            # The window fed at inference must match this exactly, regardless of how
+            # many CPU cores the host reports.
+            shp = self._session.get_inputs()[0].shape
+            self._n_features = int(shp[-1]) if isinstance(shp[-1], int) else None
+            log.info(f"ONNX model loaded from '{model_path}' (expects {self._n_features} features)")
         except Exception as exc:
             log.error(f"Failed to load ONNX model: {exc}")
 
@@ -858,21 +864,38 @@ class Pipeline:
 
         if self._scaler is not None:
             import warnings
-            # Ensure feature count matches scaler expectation
-            n_expected = self._scaler.n_features_in_
-            if len(values) != n_expected:
-                values = values[:n_expected]
+            # The scaler (and the ONNX graph behind it) were fitted with a fixed
+            # feature width on the training machine. A host with a different CPU
+            # core count produces a different number of `cpu_core_*` columns, so we
+            # pad short vectors with zeros and truncate long ones to that exact
+            # width. This keeps the app working on any hardware instead of crashing
+            # on machines with fewer cores or silently mis-shaping on more.
+            values = self._fit_width(values, self._scaler.n_features_in_)
             # Suppress benign sklearn warning: scaler was fitted on a DataFrame
             # but we pass a numpy array at inference time — behaviour is identical.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 return self._scaler.transform(values.reshape(1, -1))[0]
         else:
-            # Fallback normalisation (divide by rough maximums)
-            _fallback_max = np.array([100, 5000, 32768, 32768, 100, 32768, 100, 120]
-                                     + [100] * (len(values) - 8), dtype=np.float32)
-            _fallback_max = _fallback_max[:len(values)]
+            # Fallback normalisation (divide by rough maximums). Fit to the width
+            # the ONNX model expects so inference never sees a wrong-shaped window.
+            target = getattr(self._engine, "_n_features", None) or len(values)
+            values = self._fit_width(values, target)
+            base = [100, 5000, 32768, 32768, 100, 32768, 100, 120]
+            _fallback_max = np.array(base + [100] * max(0, target - len(base)),
+                                     dtype=np.float32)[:target]
             return np.clip(values / np.maximum(_fallback_max, 1e-6), 0.0, 1.0)
+
+    @staticmethod
+    def _fit_width(vec: np.ndarray, n: int) -> np.ndarray:
+        """Pad with zeros or truncate `vec` so it has exactly `n` elements."""
+        if n is None or len(vec) == n:
+            return vec
+        if len(vec) < n:
+            return np.concatenate(
+                [vec, np.zeros(n - len(vec), dtype=vec.dtype)]
+            )
+        return vec[:n]
 
     @staticmethod
     def _load_scaler(path: str):

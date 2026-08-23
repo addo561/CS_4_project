@@ -202,11 +202,12 @@ def main(page: ft.Page):
         threading.Timer(3.4, _hide).start()
 
     def notify(title, message):
-        if state["notify"]:
-            try:
-                notifier.send(title=title, message=message)
-            except Exception:
-                pass
+        # Notifications are delivered exclusively as NATIVE OS notifications by the
+        # background service (see optimizer_service.queue_notification) — a single,
+        # reliable source. The dashboard no longer raises its own alerts, so there
+        # are no in-app banners and no duplicate native notifications to trip
+        # macOS's per-app throttle. Kept as a no-op so existing call sites are safe.
+        return
 
     # ── live controls ────────────────────────────────────────────────────────
     def ring(color):
@@ -271,6 +272,11 @@ def main(page: ft.Page):
 
     def on_autopilot_change(val):
         client.send_request({"type": "command", "cmd": "toggle_autopilot", "value": val})
+        if val:
+            notify("🤖 SRO: Auto-Pilot Enabled", "The optimizer will now act automatically on predicted bottlenecks.")
+        else:
+            notify("🤖 SRO: Auto-Pilot Disabled", "Automatic mitigation is off — you're in manual control.")
+        refresh_status()
 
     opt_switch = build_switch("optimizer", ACCENT, on_optimizer_change)
     auto_switch = build_switch("autopilot", ACCENT_2, on_autopilot_change)
@@ -319,6 +325,8 @@ def main(page: ft.Page):
             def pick(e, name=p):
                 state["profile"] = name
                 client.send_request({"type": "command", "cmd": "set_profile", "value": name})
+                thr = PROFILES.get(name, PROFILES["Balanced"]).get("CONFIDENCE_THRESHOLD", 0.8)
+                notify(f"🎛 SRO: {name} Profile", f"Switched to {name} — acts at {int(thr * 100)}% bottleneck confidence.")
                 build_profile_pills()
                 update_threshold_text()
                 page.update()

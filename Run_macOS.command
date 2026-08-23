@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================
-#  System Resource Optimizer — macOS Launcher  (v3.3)
+#  System Resource Optimizer — macOS Launcher  (v4.0)
 #  Double-click this file in Finder to start the app.
 #
 #  Behaviour:
@@ -18,7 +18,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION="$(cat "$SCRIPT_DIR/src/assets/version.txt" 2>/dev/null || echo v3.3.0)"
+VERSION="$(cat "$SCRIPT_DIR/src/assets/version.txt" 2>/dev/null || echo v4.0.0)"
 echo "============================================================"
 echo "  System Resource Optimizer  ${VERSION}"
 echo "============================================================"

@@ -9,6 +9,7 @@ import threading
 import os
 import sys
 import platform
+import shutil
 import subprocess
 
 log = logging.getLogger("notifier")
@@ -28,45 +29,98 @@ if _OS == "Windows":
 
 from config import BASE_DIR
 
+def _find_terminal_notifier():
+    """Locate the terminal-notifier binary, if installed."""
+    tn = shutil.which("terminal-notifier")
+    if tn:
+        return tn
+    for cand in ("/usr/local/bin/terminal-notifier",
+                 "/opt/homebrew/bin/terminal-notifier",
+                 "/usr/bin/terminal-notifier"):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+_TERMINAL_NOTIFIER = _find_terminal_notifier()
+
+# A single, stable notification group. Every SRO alert reuses it, so macOS keeps
+# exactly ONE notification slot for the app (each new alert replaces + re-pops it)
+# instead of stacking hundreds of separate notifications — which is what tripped
+# macOS's per-app rate limit and made banners "stop working after a while".
+_NOTIF_GROUP = "sro-optimizer"
+
+# Lightweight source-side de-duplication to smooth out bursts.
+import time as _time_mod
+_last_notif = {"key": "", "t": 0.0}
+
+
 def _send_macos(title: str, message: str):
-    """Use macOS built-in osascript to display notifications instantly."""
-    import time as _time
-    # Escape double-quotes for AppleScript string literals
-    title   = title.replace('"', '\\"')
-    message = message.replace('"', '\\"')
-    
-    # Add a unique microsecond tag to prevent macOS notification coalescing
-    # (macOS silently replaces notifications with identical title+message)
-    _uid = int(_time.time() * 1000) % 100000
-    
-    # Append event ID to message body to guarantee uniqueness in the eyes of macOS Notification Center
-    message_unique = f"{message} (#{_uid})"
-    
+    """
+    Display a native macOS notification.
+
+    Prefers `terminal-notifier` — it ships its own notification identity that
+    macOS reliably displays, sidestepping the "Script Editor" attribution and
+    per-app throttling that make raw osascript notifications intermittent.
+    Falls back to osascript if terminal-notifier is not installed.
+    """
+    # Drop an identical notification repeated within a few seconds (avoids
+    # double-fires and needless posting that contributes to rate limiting).
+    now = _time_mod.monotonic()
+    key = f"{title}|{message}"
+    if key == _last_notif["key"] and (now - _last_notif["t"]) < 4.0:
+        return
+    _last_notif["key"] = key
+    _last_notif["t"] = now
+
+    _uid = int(_time_mod.time() * 1000) % 100000
+
+    # ── Preferred path: terminal-notifier ────────────────────────────────────
+    if _TERMINAL_NOTIFIER:
+        try:
+            proc = subprocess.Popen(
+                [_TERMINAL_NOTIFIER,
+                 "-title", title,
+                 "-message", message,
+                 "-sound", "Blow",
+                 "-group", _NOTIF_GROUP],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+            # Reap the child so a long session never accumulates zombie processes.
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            log.info(f"terminal-notifier notification sent: {title}")
+            return
+        except Exception as exc:
+            log.warning(f"terminal-notifier failed ({exc}); falling back to osascript.")
+
+    # ── Fallback: osascript (attributed to Script Editor) ────────────────────
+    title_s   = title.replace('"', '\\"')
+    message_s = f"{message} (#{_uid})".replace('"', '\\"')
     script = (
-        f'display notification "{message_unique}" '
-        f'with title "{title}" '
+        f'display notification "{message_s}" '
+        f'with title "{title_s}" '
         f'subtitle "Event ID: {_uid}" '
         f'sound name "Blow"'
     )
-    
     try:
-        # Run osascript and capture stdout/stderr to diagnose any silent failures
         proc = subprocess.Popen(
             ["osascript", "-e", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-            close_fds=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, start_new_session=True, close_fds=True,
         )
         try:
-            stdout, stderr = proc.communicate(timeout=1.0)
+            _out, err = proc.communicate(timeout=1.0)
             if proc.returncode != 0:
-                log.warning(f"osascript notification failed with code {proc.returncode}. stderr: {stderr.strip()}")
+                log.warning(f"osascript notification failed ({proc.returncode}): {err.strip()}")
             else:
                 log.info(f"osascript notification sent successfully: {title}")
         except subprocess.TimeoutExpired:
-            # If it takes longer than 1 second, let it continue in background
             log.info(f"osascript notification pending background delivery: {title}")
     except Exception as exc:
         log.warning(f"osascript notification execution failed: {exc}")
