@@ -1,985 +1,898 @@
+#!/usr/bin/env python3
 """
-dashboard_glass.py — System Resource Optimizer (glassmorphic client).
+dashboard.py — desktop UI for the System Resource Optimizer.
 
-Production Flet client wired to the background service (`optimizer_service.py`)
-over local TCP IPC. Modern glass UI with 4 tabs (Dashboard, AI Analytics,
-Settings, Help) and a first-run guided tour. Lightweight: a single 1 Hz IPC
-poll drives everything; no local model, no file logging from the UI.
+A thin client: it connects to the background service over IPC (line-delimited
+JSON on 127.0.0.1:5050), renders live telemetry, the model's forecast and its
+attributions, and sends commands. It starts the service itself when it isn't
+running and reconnects automatically if the connection drops.
 """
-
-import asyncio
-import json
-import logging
-import math
-import os
-import socket
-import sys
-import threading
-import time
-from collections import deque
-
 import flet as ft
-import flet.canvas as cv
+import asyncio
+import threading
+import subprocess
+import platform
+import socket
+import json
+import time
+import sys
+import os
+
+try:
+    from config import VERSION, IPC_PORT as _CFG_PORT
+except Exception:
+    VERSION, _CFG_PORT = "v4.1.0", 5050
+try:
+    from core.notifier import Notifier
+    notifier = Notifier()
+except Exception:
+    notifier = None
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-if _DIR not in sys.path:
-    sys.path.insert(0, _DIR)
 
-from config import CALIBRATION_SECONDS, VERSION, PROFILES, IPC_PORT, BASE_DIR
-from core.notifier import Notifier
+IPC_HOST, IPC_PORT = "127.0.0.1", _CFG_PORT
 
-log = logging.getLogger("sro_dashboard")
-log.addHandler(logging.NullHandler())
+# ── themes ──────────────────────────────────────────────────────────────────
+DARK = {
+    "bg": "#0B1220", "bg2": "#0C1A30", "card": "#16233F", "panel": "#111F38",
+    "text": "#FFFFFF", "text2": "#CADCFC", "muted": "#7C8AA5", "line": "#CADCFC",
+    "cyan": "#2AC6D9", "mint": "#3DDC97", "amber": "#F4A259",
+    "red": "#F96167", "violet": "#9B8CFF", "teal": "#4FA8C7",
+    "line_op": 0.10, "track_op": 0.09, "soft_op": 0.06,
+}
+LIGHT = {
+    "bg": "#F5F8FC", "bg2": "#E9F0F9", "card": "#FFFFFF", "panel": "#EEF3FA",
+    "text": "#0B1220", "text2": "#22314B", "muted": "#5F6E85", "line": "#3B5878",
+    "cyan": "#0E7C8C", "mint": "#17875A", "amber": "#A85E18",
+    "red": "#B4302A", "violet": "#5A49BE", "teal": "#155E75",
+    "line_op": 0.20, "track_op": 0.12, "soft_op": 0.08,
+}
 
-# ── Palette ───────────────────────────────────────────────────────────────────
-BG_TOP   = "#0A0E14"
-BG_BOT   = "#0F1A1F"
-ACCENT   = "#00E0A8"
-ACCENT_2 = "#3DA9FC"
-VIOLET   = "#9B6CFF"
-WARN     = "#F7B955"
-CRIT     = "#FF6B6B"
-TEXT     = "#EAF2F0"
-MUTED    = "#8FA3A0"
-GLASS    = "#FFFFFF"
+st = {"light": False, "running": False, "live": False, "want_live": True,
+      "autopilot": True, "profile": "Balanced", "thr": 80,
+      "prevented": 0, "protected": 0, "status_token": "mint",
+      "log_seen": set(), "last_action": ""}
+T = dict(DARK)
 
-HIST_LEN = 46
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def glass(content, *, padding=20, radius=22, expand=False, width=None, height=None,
-          glow=ACCENT, glow_strength=0.18):
-    return ft.Container(
-        content=content,
-        padding=ft.Padding(padding, padding, padding, padding),
-        border_radius=radius, width=width, height=height, expand=expand,
-        bgcolor=ft.Colors.with_opacity(0.05, GLASS),
-        blur=ft.Blur(22, 22, ft.BlurTileMode.CLAMP),
-        border=ft.Border.all(1, ft.Colors.with_opacity(0.10, GLASS)),
-        gradient=ft.LinearGradient(
-            begin=ft.Alignment.TOP_LEFT, end=ft.Alignment.BOTTOM_RIGHT,
-            colors=[ft.Colors.with_opacity(0.09, GLASS), ft.Colors.with_opacity(0.015, GLASS)]),
-        shadow=ft.BoxShadow(blur_radius=34, spread_radius=-6,
-                            color=ft.Colors.with_opacity(glow_strength, glow),
-                            offset=ft.Offset(0, 14)),
-    )
+REG = []
+def reg(ctrl, attr, resolver):
+    REG.append((ctrl, attr, resolver)); return ctrl
 
 
-def blob(color, size, left, top):
-    return ft.Container(width=size, height=size, left=left, top=top, border_radius=size,
-                        bgcolor=ft.Colors.with_opacity(0.55, color),
-                        blur=ft.Blur(140, 140, ft.BlurTileMode.CLAMP))
-
-
-def pct_color(p):
-    return ACCENT if p < 60 else (WARN if p < 85 else CRIT)
-
-
-def lbl(txt, size=12, color=MUTED, weight=ft.FontWeight.W_500):
-    return ft.Text(txt, size=size, color=color, weight=weight)
-
-
-def card_title(icon, text, glow):
-    return ft.Row([ft.Icon(icon, size=18, color=glow),
-                   lbl(text, size=12, color=TEXT, weight=ft.FontWeight.W_600)], spacing=8)
-
-
-# ── IPC client (ported from the legacy dashboard) ─────────────────────────────
-class IPCClient:
-    def __init__(self, host="127.0.0.1", port=IPC_PORT):
-        self.host = host
-        self.port = port
+# ── IPC client ──────────────────────────────────────────────────────────────
+class Backend:
+    """Line-delimited JSON over the service's TCP loopback socket."""
+    def __init__(self, host=IPC_HOST, port=IPC_PORT):
+        self.host, self.port = host, port
         self.sock = None
-        self.connected = False
-        self.lock = threading.Lock()
+        self._buf = b""
+        self._lock = threading.Lock()
 
-    def connect(self) -> bool:
-        with self.lock:
-            if self.connected:
-                return True
-            try:
-                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.sock.settimeout(0.5)
-                self.sock.connect((self.host, self.port))
-                self.sock.settimeout(3.0)
-                self.connected = True
-                return True
-            except Exception:
-                self.connected = False
-                if self.sock:
-                    try:
-                        self.sock.close()
-                    except Exception:
-                        pass
-                    self.sock = None
-                return False
+    def connect(self, timeout=2.0):
+        s = socket.create_connection((self.host, self.port), timeout=timeout)
+        s.settimeout(6.0)
+        with self._lock:
+            self.sock, self._buf = s, b""
+        return True
 
-    def send_request(self, req: dict) -> dict:
-        if not self.connected:
-            if not self.connect():
-                return {"connected": False, "status": "error", "message": "Service offline"}
-        with self.lock:
-            try:
-                self.sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
-                buffer = b""
-                while b"\n" not in buffer:
-                    chunk = self.sock.recv(4096)
-                    if not chunk:
-                        raise ConnectionError("Connection closed by server")
-                    buffer += chunk
-                return json.loads(buffer.split(b"\n")[0].decode("utf-8"))
-            except Exception as e:
-                self.connected = False
-                if self.sock:
-                    try:
-                        self.sock.close()
-                    except Exception:
-                        pass
-                return {"connected": False, "status": "error", "message": f"IPC error: {e}"}
+    def request(self, obj):
+        with self._lock:
+            if not self.sock:
+                raise ConnectionError("not connected")
+            self.sock.sendall((json.dumps(obj) + "\n").encode("utf-8"))
+            while b"\n" not in self._buf:
+                chunk = self.sock.recv(65536)
+                if not chunk:
+                    raise ConnectionError("service closed the connection")
+                self._buf += chunk
+            line, self._buf = self._buf.split(b"\n", 1)
+            return json.loads(line.decode("utf-8"))
 
     def close(self):
-        with self.lock:
-            if self.sock:
-                try:
-                    self.sock.close()
-                except Exception:
-                    pass
-                self.connected = False
+        with self._lock:
+            try:
+                if self.sock: self.sock.close()
+            except Exception:
+                pass
+            self.sock, self._buf = None, b""
 
 
-client = IPCClient()
-notifier = Notifier()
+backend = Backend()
 
 
 def main(page: ft.Page):
     page.title = "System Resource Optimizer"
-    page.theme_mode = ft.ThemeMode.DARK
-    page.bgcolor = BG_TOP
     page.padding = 0
-    page.window.width = 1240
-    page.window.height = 840
+    page.window.width = 1280
+    page.window.height = 820
     page.window.min_width = 1040
-    page.window.min_height = 720
+    page.window.min_height = 660
+    page.scroll = ft.ScrollMode.AUTO
 
-    # window/dock icon (macOS .icns / Windows .ico / Linux .png)
-    import platform
-    icon_ext = {"Windows": "ico", "Darwin": "icns"}.get(platform.system(), "png")
-    icon_path = os.path.join(BASE_DIR, "assets", f"icon.{icon_ext}")
-    if os.path.exists(icon_path):
-        page.window.icon = icon_path
+    def upd():
+        try: page.update()
+        except Exception: pass
 
-    state = {"view": "dashboard", "optimizer": True, "autopilot": True,
-             "notify": True, "profile": "Balanced",
-             "service_stopped": False, "announced": False}
-    undo_state = {"enabled": False}
+    # ── building blocks ─────────────────────────────────────────────────────
+    def card(content, pad=16, radius=16):
+        c = ft.Container(content=content, padding=pad, border_radius=radius, bgcolor=T["card"],
+                         border=ft.Border.all(1, ft.Colors.with_opacity(T["line_op"], T["line"])))
+        reg(c, "bgcolor", lambda t: t["card"])
+        reg(c, "border", lambda t: ft.Border.all(1, ft.Colors.with_opacity(t["line_op"], t["line"])))
+        return c
 
-    # ── toast popup (Flet 0.85 has no page.snack_bar; use our own glass toast) ─
-    toast_icon = ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED, size=18, color=ACCENT)
-    toast_text = ft.Text("", size=13, color=TEXT, weight=ft.FontWeight.W_600)
-    toast = ft.Container(
-        content=glass(ft.Row([toast_icon, toast_text], spacing=10, tight=True),
-                      padding=14, radius=14, glow=ACCENT, glow_strength=0.28),
-        right=26, top=22, visible=False,
-        animate_opacity=ft.Animation(250, ft.AnimationCurve.EASE_OUT))
+    def txt(value, size=12, token="text2", weight=None):
+        c = ft.Text(value, size=size, color=T[token], weight=weight)
+        reg(c, "color", lambda t, k=token: t[k]); return c
 
-    def show_toast(message, icon=ft.Icons.CHECK_CIRCLE_ROUNDED, color=ACCENT):
-        toast_icon.icon = icon
-        toast_icon.color = color
-        toast_text.value = message
-        toast.visible = True
-        try:
-            page.update()
-        except Exception:
-            pass
+    def icon(name, token="cyan", size=18):
+        c = ft.Icon(name, color=T[token], size=size)
+        reg(c, "color", lambda t, k=token: t[k]); return c
 
-        def _hide():
-            toast.visible = False
-            try:
-                page.update()
-            except Exception:
-                pass
+    def title_row(icon_name, label, token="cyan"):
+        return ft.Row([icon(icon_name, token, 17),
+                       txt(label, 12.5, "text2", ft.FontWeight.W_600)], spacing=8)
 
-        threading.Timer(3.4, _hide).start()
+    # ── top bar ─────────────────────────────────────────────────────────────
+    mode_txt = ft.Text("OFFLINE", size=10.5, color=T["muted"], weight=ft.FontWeight.W_700)
+    reg(mode_txt, "color", lambda t: t["mint"] if st["live"] else t["muted"])
+    mode_chip = ft.Container(content=mode_txt, padding=ft.Padding(10, 6, 10, 6), border_radius=8,
+                             bgcolor=ft.Colors.with_opacity(T["soft_op"], T["line"]))
+    reg(mode_chip, "bgcolor", lambda t: (ft.Colors.with_opacity(0.16, t["mint"]) if st["live"]
+                                         else ft.Colors.with_opacity(t["soft_op"], t["line"])))
 
-    def notify(title, message):
-        # Notifications are delivered exclusively as NATIVE OS notifications by the
-        # background service (see optimizer_service.queue_notification) — a single,
-        # reliable source. The dashboard no longer raises its own alerts, so there
-        # are no in-app banners and no duplicate native notifications to trip
-        # macOS's per-app throttle. Kept as a no-op so existing call sites are safe.
-        return
+    status_dot = reg(ft.Container(width=9, height=9, border_radius=9, bgcolor=T["mint"]),
+                     "bgcolor", lambda t: t[st["status_token"]])
+    status_txt = reg(ft.Text("ALL CLEAR", size=11.5, color=T["mint"], weight=ft.FontWeight.W_700),
+                     "color", lambda t: t[st["status_token"]])
+    status_pill = ft.Container(content=ft.Row([status_dot, status_txt], spacing=8, tight=True),
+                               padding=ft.Padding(13, 8, 13, 8), border_radius=20, bgcolor=T["panel"],
+                               border=ft.Border.all(1, ft.Colors.with_opacity(T["line_op"], T["line"])))
+    reg(status_pill, "bgcolor", lambda t: t["panel"])
+    reg(status_pill, "border", lambda t: ft.Border.all(1, ft.Colors.with_opacity(t["line_op"], t["line"])))
 
-    # ── live controls ────────────────────────────────────────────────────────
-    def ring(color):
-        return ft.ProgressRing(value=0, stroke_width=11, color=color,
-                               bgcolor=ft.Colors.with_opacity(0.08, GLASS), width=150, height=150)
+    theme_btn = ft.IconButton(icon=ft.Icons.LIGHT_MODE_ROUNDED, icon_color=T["muted"],
+                              icon_size=19, tooltip="Switch to light mode")
+    reg(theme_btn, "icon_color", lambda t: t["muted"])
 
-    cpu_ring, mem_ring, risk_ring = ring(ACCENT), ring(ACCENT_2), ring(VIOLET)
-    cpu_val = ft.Text("0", size=40, weight=ft.FontWeight.BOLD, color=TEXT)
-    mem_val = ft.Text("0", size=40, weight=ft.FontWeight.BOLD, color=TEXT)
-    risk_val = ft.Text("0", size=40, weight=ft.FontWeight.BOLD, color=TEXT)
+    def styled(btn, token, filled=True, pad=(15, 12)):
+        def mk(t):
+            if filled:
+                return ft.ButtonStyle(bgcolor=t[token], color=t["bg"],
+                                      shape=ft.RoundedRectangleBorder(radius=11),
+                                      padding=ft.Padding(pad[0], pad[1], pad[0], pad[1]))
+            return ft.ButtonStyle(bgcolor=ft.Colors.with_opacity(0.16, t[token]), color=t[token],
+                                  shape=ft.RoundedRectangleBorder(radius=11),
+                                  padding=ft.Padding(pad[0], pad[1], pad[0], pad[1]))
+        btn.style = mk(T); reg(btn, "style", mk); return btn
 
-    swap_v = ft.Text("0%", size=22, weight=ft.FontWeight.BOLD, color=TEXT)
-    disk_v = ft.Text("0.0", size=22, weight=ft.FontWeight.BOLD, color=TEXT)
-    net_up = ft.Text("0.0", size=22, weight=ft.FontWeight.BOLD, color=TEXT)
-    net_dn = ft.Text("0.0", size=22, weight=ft.FontWeight.BOLD, color=TEXT)
-    temp_v = ft.Text("—", size=22, weight=ft.FontWeight.BOLD, color=TEXT)
-    proc_n = ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color=TEXT)
-    risk_desc = ft.Text("Connecting…", size=12, color=MUTED, weight=ft.FontWeight.W_500)
-    an_pred = ft.Text("Predicted CPU ≈ —", size=13, color=TEXT, weight=ft.FontWeight.W_500)
-    an_thresh = ft.Text("Confidence required: —", size=12, color=MUTED)
+    conn_btn = styled(ft.FilledButton("  Connect", icon=ft.Icons.SENSORS_ROUNDED), "mint", False)
+    tour_btn = styled(ft.FilledButton("  Tour", icon=ft.Icons.TIPS_AND_UPDATES_ROUNDED), "cyan", True)
 
-    status_dot = ft.Container(width=9, height=9, border_radius=9, bgcolor=WARN)
-    status_txt = lbl("CONNECTING…", size=11, color=WARN, weight=ft.FontWeight.W_600)
-    clock = ft.Text("", size=12, color=MUTED, weight=ft.FontWeight.W_500)
-    susp_txt = ft.Text("0 suspended", size=11, color=MUTED)
+    topbar = ft.Row([
+        ft.Row([icon(ft.Icons.BOLT_ROUNDED, "cyan", 25),
+                ft.Column([txt("System Resource Optimizer", 17, "text", ft.FontWeight.BOLD),
+                           txt(f"Predictive bottleneck forecasting  ·  {VERSION}", 10.5, "muted")], spacing=1)],
+               spacing=10),
+        ft.Row([mode_chip, status_pill, theme_btn, conn_btn, tour_btn], spacing=8),
+    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+       vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-    hist = deque([0] * HIST_LEN, maxlen=HIST_LEN)
-    spark = ft.Row(spacing=3, alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                   vertical_alignment=ft.CrossAxisAlignment.END, height=90)
-    proc_list = ft.Column(spacing=10, scroll=ft.ScrollMode.HIDDEN, expand=True)
+    # ── banner ──────────────────────────────────────────────────────────────
+    banner_title = ft.Text("Bottleneck predicted in ~30 seconds", size=13.5,
+                           weight=ft.FontWeight.BOLD, color="#0B1220")
+    forecast_txt = ft.Text("Forecast confidence —", size=11, color="#20303A")
+    banner = ft.Container(
+        content=ft.Row([ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color="#0B1220", size=21),
+                        ft.Column([banner_title, forecast_txt], spacing=1)], spacing=12),
+        padding=ft.Padding(16, 11, 16, 11), border_radius=13, bgcolor=T["amber"],
+        visible=False, animate_opacity=ft.Animation(300, ft.AnimationCurve.EASE_OUT))
+    reg(banner, "bgcolor", lambda t: t["amber"])
 
-    # attribution bars (model order: CPU, Memory, Temp, Swap)
-    attr = {}
-    for nm in ("CPU", "Memory", "Temp", "Swap"):
-        fill = ft.Container(width=0, height=8, border_radius=8, bgcolor=ACCENT,
-                            animate=ft.Animation(350, ft.AnimationCurve.EASE_OUT))
-        val = ft.Text("0%", size=12, color=MUTED, width=46, text_align=ft.TextAlign.RIGHT)
-        attr[nm] = (fill, val)
+    # ── gauges ──────────────────────────────────────────────────────────────
+    def gauge(label, token):
+        ring = ft.ProgressRing(value=0.0, width=104, height=104, stroke_width=10, color=T[token],
+                               bgcolor=ft.Colors.with_opacity(T["track_op"], T["line"]))
+        reg(ring, "bgcolor", lambda t: ft.Colors.with_opacity(t["track_op"], t["line"]))
+        val = txt("0", 30, "text", ft.FontWeight.BOLD)
+        stack = ft.Stack([ring, ft.Container(
+            content=ft.Row([val, txt("%", 12, "muted")], alignment=ft.MainAxisAlignment.CENTER,
+                           vertical_alignment=ft.CrossAxisAlignment.END, spacing=1, tight=True),
+            width=104, height=104, alignment=ft.Alignment.CENTER)], width=104, height=104)
+        c = card(ft.Column([stack, ft.Container(height=5),
+                            txt(label, 11.5, "muted", ft.FontWeight.W_600)],
+                           horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2))
+        return ft.Container(c, expand=True), ring, val
 
-    # ── settings controls (created up front so the poll loop can sync them) ───
-    def build_switch(key, glow, on_extra=None):
-        sw = ft.Switch(value=state[key], active_color=glow,
-                       active_track_color=ft.Colors.with_opacity(0.4, glow),
-                       inactive_track_color=ft.Colors.with_opacity(0.10, GLASS))
+    cpu_card, cpu_ring, cpu_val = gauge("CPU LOAD", "cyan")
+    mem_card, mem_ring, mem_val = gauge("MEMORY", "teal")
+    risk_card, risk_ring, risk_val = gauge("BOTTLENECK RISK", "amber")
+    gauges = ft.Row([cpu_card, mem_card, risk_card], spacing=12)
 
-        def changed(e):
-            state[key] = e.control.value
-            if on_extra:
-                on_extra(e.control.value)
-            page.update()
+    # ── environment tiles ───────────────────────────────────────────────────
+    def tile(icon_name, label, token):
+        v = txt("—", 16, "text", ft.FontWeight.BOLD)
+        c = card(ft.Row([icon(icon_name, token, 19),
+                         ft.Column([v, txt(label, 10, "muted")], spacing=0)], spacing=9),
+                 pad=12, radius=13)
+        return ft.Container(c, expand=True), v
 
-        sw.on_change = changed
-        return sw
+    temp_c, temp_v = tile(ft.Icons.THERMOSTAT_ROUNDED, "TEMP °C", "amber")
+    swap_c, swap_v = tile(ft.Icons.SWAP_HORIZ_ROUNDED, "SWAP", "teal")
+    freq_c, freq_v = tile(ft.Icons.SPEED_ROUNDED, "CPU FREQ MHz", "cyan")
+    tiles = ft.Row([temp_c, swap_c, freq_c], spacing=12)
 
-    def on_optimizer_change(val):
-        client.send_request({"type": "command", "cmd": "toggle_optimizer", "value": val})
-        if val:
-            notify("⚡ SRO: Optimizer Resumed", "Background optimizer loop has been resumed.")
+    # ── sparkline ───────────────────────────────────────────────────────────
+    N = 48
+    hist = [8] * N
+    bars = [ft.Container(width=8, height=8, border_radius=3,
+                         bgcolor=ft.Colors.with_opacity(0.55, T["cyan"]),
+                         animate=ft.Animation(280, ft.AnimationCurve.EASE_OUT),
+                         alignment=ft.Alignment.BOTTOM_CENTER) for _ in range(N)]
+    spark = ft.Row(bars, alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                   vertical_alignment=ft.CrossAxisAlignment.END, height=112)
+    chart_sub = txt("last 48 s", 10.5, "muted")
+    chart_card = card(ft.Column([
+        ft.Row([title_row(ft.Icons.TIMELINE_ROUNDED, "Live telemetry (CPU)"), chart_sub],
+               alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        ft.Container(height=10), spark], spacing=2))
+
+    # ── XAI ─────────────────────────────────────────────────────────────────
+    def attr(label, token):
+        bar = ft.ProgressBar(value=0.0, color=T[token],
+                             bgcolor=ft.Colors.with_opacity(T["track_op"], T["line"]),
+                             height=9, border_radius=6, expand=True)
+        reg(bar, "color", lambda t, k=token: t[k])
+        reg(bar, "bgcolor", lambda t: ft.Colors.with_opacity(t["track_op"], t["line"]))
+        pv = ft.Text("0%", size=10.5, color=T["muted"], width=34, text_align=ft.TextAlign.RIGHT)
+        reg(pv, "color", lambda t: t["muted"])
+        lab = txt(label, 11, "text2", ft.FontWeight.W_500); lab.width = 52
+        return ft.Row([lab, bar, pv], spacing=10,
+                      vertical_alignment=ft.CrossAxisAlignment.CENTER), bar, pv
+
+    a_cpu, b_cpu, p_cpu = attr("CPU", "cyan")
+    a_mem, b_mem, p_mem = attr("Memory", "teal")
+    a_tmp, b_tmp, p_tmp = attr("Temp", "amber")
+    a_swp, b_swp, p_swp = attr("Swap", "violet")
+    xai_card = card(ft.Column([
+        title_row(ft.Icons.INSIGHTS_ROUNDED, "Why? — Explainable AI attributions"),
+        txt("Which signals drove the forecast (occlusion sensitivity)", 10.5, "muted"),
+        ft.Container(height=11), a_cpu, ft.Container(height=9), a_mem,
+        ft.Container(height=9), a_tmp, ft.Container(height=9), a_swp], spacing=2))
+
+    def set_attr(c, m, tp, s):
+        for bar, pv, v in [(b_cpu,p_cpu,c),(b_mem,p_mem,m),(b_tmp,p_tmp,tp),(b_swp,p_swp,s)]:
+            bar.value = max(0.0, min(1.0, v)); pv.value = f"{int(max(0.0,min(1.0,v))*100)}%"
+
+    # ── counters ────────────────────────────────────────────────────────────
+    def counter(label, token, icon_name):
+        v = txt("0", 24, "text", ft.FontWeight.BOLD)
+        return ft.Container(ft.Column([
+            ft.Row([icon(icon_name, token, 15), txt(label, 10, "muted")], spacing=6), v],
+            spacing=2), expand=True), v
+
+    prev_c, prev_v = counter("BOTTLENECKS PREVENTED", "mint", ft.Icons.SHIELD_ROUNDED)
+    prot_c, prot_v = counter("PROCESSES HANDLED", "violet", ft.Icons.LOCK_ROUNDED)
+    session_card = card(ft.Row([prev_c, prot_c], spacing=10))
+
+    # ── processes ───────────────────────────────────────────────────────────
+    proc_list = ft.Column(spacing=7)
+    proc_rows = []                      # dicts with row refs + state
+
+    def make_proc_row(name, mem, state="running"):
+        dot = ft.Icon(ft.Icons.CIRCLE, color=T["mint"], size=10)
+        chip_txt = ft.Text("RUNNING", size=10, color=T["mint"], weight=ft.FontWeight.W_700)
+        chip = ft.Container(content=chip_txt, padding=ft.Padding(8, 3, 8, 3), border_radius=9,
+                            bgcolor=ft.Colors.with_opacity(0.15, T["mint"]))
+        name_t = ft.Text(name, size=12.5, color=T["text"], weight=ft.FontWeight.W_600,
+                         no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS, expand=True)
+        mem_t = ft.Text(mem, size=11, color=T["muted"])
+        row = ft.Container(content=ft.Row([
+                ft.Row([dot, name_t], spacing=9, expand=True),
+                ft.Row([mem_t, chip], spacing=10)],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            padding=ft.Padding(12, 9, 12, 9), border_radius=11, bgcolor=T["panel"],
+            animate=ft.Animation(250, ft.AnimationCurve.EASE_OUT))
+        p = {"row": row, "dot": dot, "chip": chip, "chip_txt": chip_txt,
+             "name_t": name_t, "mem_t": mem_t, "state": state, "name": name}
+        paint_proc(p)
+        return p
+
+    def paint_proc(p):
+        tok = "amber" if p["state"] == "suspended" else "mint"
+        p["dot"].color = T[tok]
+        p["chip_txt"].value = "SUSPENDED" if p["state"] == "suspended" else "RUNNING"
+        p["chip_txt"].color = T[tok]
+        p["chip"].bgcolor = ft.Colors.with_opacity(0.15, T[tok])
+        p["name_t"].color = T["text"]; p["mem_t"].color = T["muted"]
+        p["row"].bgcolor = (ft.Colors.with_opacity(0.12, T["amber"])
+                            if p["state"] == "suspended" else T["panel"])
+
+    def set_proc(p, state):
+        p["state"] = state; paint_proc(p)
+
+    def set_proc_list(items):
+        """items: list of (name, mem_str, state).
+
+        Rebuilds rows only when the set of process names changes; otherwise it
+        updates the existing rows in place. Rebuilding every poll made
+        page.update() progressively slower and eventually tripped the service's
+        15-second read timeout.
+        """
+        names = [i[0] for i in items]
+        if len(proc_rows) == len(items) and [p["name"] for p in proc_rows] == names:
+            for p, (name, mem, state) in zip(proc_rows, items):
+                if p["mem_t"].value != mem:
+                    p["mem_t"].value = mem
+                if p["state"] != state:
+                    p["state"] = state; paint_proc(p)
+            return
+        proc_rows.clear(); proc_list.controls.clear()
+        for name, mem, state in items:
+            p = make_proc_row(name, mem, state)
+            proc_rows.append(p); proc_list.controls.append(p["row"])
+
+    proc_title = txt("Top processes", 12.5, "text2", ft.FontWeight.W_600)
+    proc_card = card(ft.Column([
+        ft.Row([icon(ft.Icons.SPEED_ROUNDED, "violet", 17), proc_title], spacing=8),
+        ft.Container(height=9), proc_list], spacing=0))
+
+    OFFLINE_PROCS = [("Waiting for the background service…", "—", "running")]
+
+    # ── event feed ──────────────────────────────────────────────────────────
+    log = ft.ListView(spacing=7, auto_scroll=True, expand=True)
+    log_items = []
+    def add_log(msg, token="text2", icon_name=ft.Icons.CHEVRON_RIGHT_ROUNDED):
+        i = ft.Icon(icon_name, size=13.5, color=T[token])
+        t = ft.Text(msg, size=11.5, color=T[token], no_wrap=False, expand=True)
+        log_items.append((i, t, token))
+        log.controls.append(ft.Row([i, t], spacing=8,
+                                   vertical_alignment=ft.CrossAxisAlignment.START))
+        if len(log.controls) > 120:
+            log.controls.pop(0); log_items.pop(0)
+
+    add_log("Starting up — connecting to the background service…",
+            "muted", ft.Icons.SENSORS_ROUNDED)
+    log_card = card(ft.Column([
+        title_row(ft.Icons.TIMELINE_ROUNDED, "Event feed", "mint"),
+        ft.Container(height=7), ft.Container(content=log, height=142)], spacing=2))
+
+    # ── controls ────────────────────────────────────────────────────────────
+    thr_txt = txt("Acts at 80% confidence", 10.5, "muted")
+    pills = {}
+    def make_pill(name, thr, token):
+        label = ft.Text(name, size=11, weight=ft.FontWeight.W_700,
+                        color=(T["bg"] if st["profile"] == name else T["muted"]))
+        c = ft.Container(content=label, padding=ft.Padding(13, 7, 13, 7), border_radius=10,
+                         bgcolor=(T[token] if st["profile"] == name
+                                  else ft.Colors.with_opacity(T["soft_op"], T["line"])),
+                         animate=ft.Animation(200, ft.AnimationCurve.EASE_OUT))
+        def pick(e):
+            st["profile"] = name; st["thr"] = thr
+            thr_txt.value = f"Acts at {thr}% confidence"
+            paint_pills()
+            if st["live"]:
+                send_cmd("set_profile", value=name)
+            add_log(f"Profile → {name} (acts at {thr}% confidence).", token, ft.Icons.TUNE_ROUNDED)
+            upd()
+        c.on_click = pick
+        pills[name] = (c, label, token)
+        return c
+
+    def paint_pills():
+        for nm, (c, label, token) in pills.items():
+            active = st["profile"] == nm
+            label.color = T["bg"] if active else T["muted"]
+            c.bgcolor = T[token] if active else ft.Colors.with_opacity(T["soft_op"], T["line"])
+
+    profiles = ft.Row([make_pill("Eco", 70, "mint"), make_pill("Balanced", 80, "cyan"),
+                       make_pill("Gaming", 90, "violet")], spacing=8)
+
+    auto_sw = ft.Switch(value=True, active_color=T["mint"], scale=0.85)
+    reg(auto_sw, "active_color", lambda t: t["mint"])
+    def on_auto(e):
+        st["autopilot"] = auto_sw.value
+        if st["live"]:
+            send_cmd("toggle_autopilot", value=auto_sw.value)
+        add_log(f"Auto-Pilot {'enabled' if auto_sw.value else 'disabled'}.",
+                "mint" if auto_sw.value else "amber", ft.Icons.SMART_TOY_ROUNDED)
+        upd()
+    auto_sw.on_change = on_auto
+
+    svc_sw = ft.Switch(value=True, active_color=T["cyan"], scale=0.85)
+    reg(svc_sw, "active_color", lambda t: t["cyan"])
+    def on_service(e):
+        if svc_sw.value:
+            st["want_live"] = True
+            launch_service()
+            add_log("Starting the background service…", "cyan",
+                    ft.Icons.POWER_SETTINGS_NEW_ROUNDED)
         else:
-            notify("⚡ SRO: Optimizer Suspended", "Background optimizer loop has been suspended. All processes resumed.")
-        refresh_status()
+            send_cmd("shutdown")
+            st["want_live"] = False
+            add_log("Background service stopped. Your system is no longer protected.",
+                    "amber", ft.Icons.POWER_SETTINGS_NEW_ROUNDED)
+            go_offline("")
+        upd()
+    svc_sw.on_change = on_service
 
-    def on_autopilot_change(val):
-        client.send_request({"type": "command", "cmd": "toggle_autopilot", "value": val})
-        if val:
-            notify("🤖 SRO: Auto-Pilot Enabled", "The optimizer will now act automatically on predicted bottlenecks.")
-        else:
-            notify("🤖 SRO: Auto-Pilot Disabled", "Automatic mitigation is off — you're in manual control.")
-        refresh_status()
+    boost_btn = styled(ft.FilledButton("  Boost", icon=ft.Icons.ROCKET_LAUNCH_ROUNDED),
+                       "cyan", False, (13, 11))
+    undo_btn = styled(ft.FilledButton("  Undo", icon=ft.Icons.REPLAY_ROUNDED),
+                      "mint", False, (13, 11))
 
-    opt_switch = build_switch("optimizer", ACCENT, on_optimizer_change)
-    auto_switch = build_switch("autopilot", ACCENT_2, on_autopilot_change)
-    notify_switch = build_switch("notify", VIOLET)
+    controls_card = card(ft.Column([
+        title_row(ft.Icons.TUNE_ROUNDED, "Controls", "cyan"),
+        ft.Container(height=11),
+        txt("Performance profile", 11, "text2", ft.FontWeight.W_600),
+        ft.Container(height=7), profiles, ft.Container(height=5), thr_txt,
+        ft.Container(height=13),
+        ft.Row([ft.Row([icon(ft.Icons.SMART_TOY_ROUNDED, "mint", 17),
+                        txt("Auto-Pilot", 11.5, "text2", ft.FontWeight.W_600)], spacing=8),
+                auto_sw], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        ft.Container(height=7),
+        ft.Row([ft.Row([icon(ft.Icons.POWER_SETTINGS_NEW_ROUNDED, "cyan", 17),
+                        txt("Background service", 11.5, "text2", ft.FontWeight.W_600)], spacing=8),
+                svc_sw], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        ft.Container(height=11),
+        ft.Row([ft.Container(boost_btn, expand=True),
+                ft.Container(undo_btn, expand=True)], spacing=9)], spacing=2))
 
-    # Master switch: completely STOP (kill) or START the background service process.
-    service_switch = ft.Switch(value=True, active_color=ACCENT,
-                               active_track_color=ft.Colors.with_opacity(0.4, ACCENT),
-                               inactive_track_color=ft.Colors.with_opacity(0.10, GLASS))
+    # ── protected processes (user whitelist) ────────────────────────────────
+    wl_list = ft.Column(spacing=6)
+    wl_input = ft.TextField(hint_text="app name, e.g. obs64", dense=True,
+                            text_size=12, height=42, expand=True,
+                            border_radius=10, content_padding=ft.Padding(12, 8, 12, 8))
+    wl_add = ft.IconButton(ft.Icons.ADD_ROUNDED, icon_color=T["mint"], icon_size=20,
+                           tooltip="Protect this app")
+    reg(wl_add, "icon_color", lambda t: t["mint"])
 
-    def set_service(running):
-        if running:
-            state["service_stopped"] = False
-            state["announced"] = False
-            launch_background_service()
-            show_toast("Starting background service…", ft.Icons.PLAY_ARROW_ROUNDED, ACCENT)
-        else:
-            try:
-                client.send_request({"type": "command", "cmd": "shutdown"})
-            except Exception:
-                pass
-            try:
-                client.close()
-            except Exception:
-                pass
-            state["service_stopped"] = True
-            show_toast("Background service stopped", ft.Icons.STOP_ROUNDED, WARN)
-        refresh_status()
-        page.update()
-
-    service_switch.on_change = lambda e: set_service(e.control.value)
-
-    profile_pills_row = ft.Row(spacing=10)
-    set_thresh_txt = ft.Text("", size=12, color=MUTED)
-
-    def update_threshold_text():
-        thr = PROFILES.get(state["profile"], PROFILES["Balanced"]).get("CONFIDENCE_THRESHOLD", 0.8)
-        set_thresh_txt.value = f"Confidence required to act: {int(thr * 100)}%  (set by profile)"
-        an_thresh.value = f"Confidence required: {int(thr * 100)}%  ·  Profile: {state['profile']}"
-
-    def build_profile_pills():
-        profile_pills_row.controls.clear()
-        for p, glow in (("Eco", ACCENT), ("Balanced", ACCENT_2), ("Gaming", VIOLET)):
-            active = state["profile"] == p
-
-            def pick(e, name=p):
-                state["profile"] = name
-                client.send_request({"type": "command", "cmd": "set_profile", "value": name})
-                thr = PROFILES.get(name, PROFILES["Balanced"]).get("CONFIDENCE_THRESHOLD", 0.8)
-                notify(f"🎛 SRO: {name} Profile", f"Switched to {name} — acts at {int(thr * 100)}% bottleneck confidence.")
-                build_profile_pills()
-                update_threshold_text()
-                page.update()
-
-            profile_pills_row.controls.append(
-                ft.Container(content=ft.Text(p, size=12, weight=ft.FontWeight.W_600,
-                                             color=(BG_TOP if active else MUTED)),
-                             padding=ft.Padding(18, 9, 18, 9), border_radius=12, on_click=pick,
-                             bgcolor=(glow if active else ft.Colors.with_opacity(0.05, GLASS)),
-                             border=ft.Border.all(1, ft.Colors.with_opacity(0.12, GLASS))))
-
-    # whitelist (protected processes)
-    wl_input = ft.TextField(hint_text="process name, e.g. spotify", expand=True, height=46,
-                            text_size=13, color=TEXT, border_color=ft.Colors.with_opacity(0.15, GLASS),
-                            focused_border_color=ACCENT, content_padding=ft.Padding(12, 8, 12, 8))
-    wl_list = ft.Column(spacing=8)
-
-    def wl_chip(name):
-        return ft.Container(
-            content=ft.Row([ft.Icon(ft.Icons.SHIELD_ROUNDED, size=14, color=ACCENT),
-                            ft.Text(name, size=12, color=TEXT, expand=True),
-                            ft.Container(content=ft.Icon(ft.Icons.CLOSE_ROUNDED, size=15, color=MUTED),
-                                         on_click=lambda e, n=name: wl_remove(n))], spacing=10),
-            padding=ft.Padding(12, 8, 12, 8), border_radius=10,
-            bgcolor=ft.Colors.with_opacity(0.05, GLASS),
-            border=ft.Border.all(1, ft.Colors.with_opacity(0.08, GLASS)))
+    def wl_row(name):
+        rm = ft.IconButton(ft.Icons.CLOSE_ROUNDED, icon_size=15, icon_color=T["muted"],
+                           tooltip="Stop protecting")
+        def do_rm(e, n=name):
+            send_cmd("remove_whitelist", value=n)
+            add_log(f"Removed “{n}” from protected apps.", "muted", ft.Icons.LOCK_ROUNDED)
+            refresh_whitelist(); upd()
+        rm.on_click = do_rm
+        return ft.Container(content=ft.Row([
+                ft.Row([ft.Icon(ft.Icons.LOCK_ROUNDED, size=13, color=T["violet"]),
+                        ft.Text(name, size=12, color=T["text"])], spacing=8),
+                rm], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            padding=ft.Padding(11, 2, 4, 2), border_radius=9, bgcolor=T["panel"])
 
     def refresh_whitelist():
-        resp = client.send_request({"type": "command", "cmd": "get_whitelist"})
-        wl = resp.get("whitelist", []) if resp.get("status") == "ok" else []
-        wl_list.controls = ([wl_chip(n) for n in wl] if wl
-                            else [ft.Text("No custom processes whitelisted.", size=12,
-                                          color=MUTED, italic=True)])
+        wl_list.controls.clear()
+        if not st["live"]:
+            wl_list.controls.append(txt("Connect to manage protected apps.", 11, "muted"))
+            return
+        r = send_cmd("get_whitelist") or {}
+        items = r.get("whitelist") or []
+        if not items:
+            wl_list.controls.append(txt("No custom apps protected yet.", 11, "muted"))
+        for n in items:
+            wl_list.controls.append(wl_row(n))
 
-    def wl_add(e=None):
-        v = (wl_input.value or "").strip().lower()
+    def add_wl(e):
+        v = (wl_input.value or "").strip()
         if not v:
             return
-        client.send_request({"type": "command", "cmd": "add_whitelist", "value": v})
+        send_cmd("add_whitelist", value=v)
+        add_log(f"“{v}” is now protected from throttling.", "violet", ft.Icons.LOCK_ROUNDED)
         wl_input.value = ""
-        refresh_whitelist()
-        page.update()
+        refresh_whitelist(); upd()
+    wl_add.on_click = add_wl
+    wl_input.on_submit = add_wl
 
-    def wl_remove(name):
-        client.send_request({"type": "command", "cmd": "remove_whitelist", "value": name})
-        refresh_whitelist()
-        page.update()
+    wl_card = card(ft.Column([
+        title_row(ft.Icons.LOCK_ROUNDED, "Protected processes", "violet"),
+        txt("These apps are never suspended — system processes are always protected too.",
+            10.5, "muted"),
+        ft.Container(height=9),
+        ft.Row([wl_input, wl_add], spacing=6),
+        ft.Container(height=8), wl_list], spacing=2))
 
-    # ── actions: boost / undo ────────────────────────────────────────────────
-    def on_boost(_e=None):
-        client.send_request({"type": "command", "cmd": "boost"})
-        notify("🚀 One-Click Boost Activated", "Memory freed and background processes suspended.")
+    # ── footer ──────────────────────────────────────────────────────────────
+    def spec(k, v, token="text2"):
+        return ft.Row([txt(k, 10, "muted"), txt(v, 11.5, token, ft.FontWeight.W_700)], spacing=6)
+    footer = card(ft.Row([
+        ft.Row([icon(ft.Icons.MEMORY_ROUNDED, "violet", 17),
+                txt("Under the hood", 11.5, "text2", ft.FontWeight.W_600)], spacing=8),
+        spec("MODEL", "2-layer GRU"), spec("PARAMS", "44,525"),
+        spec("RUNTIME", "8-bit ONNX", "mint"), spec("INFERENCE", "< 2.8 ms", "mint"),
+        spec("OVERHEAD", "< 1.8% CPU", "mint"), spec("WINDOW", "60 s × 12 signals"),
+    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+       vertical_alignment=ft.CrossAxisAlignment.CENTER, wrap=True, spacing=14, run_spacing=8),
+        pad=14, radius=14)
 
-    def on_undo(_e=None):
-        if not undo_state["enabled"]:
-            return
-        client.send_request({"type": "command", "cmd": "undo"})
-        notify("↩ Undo: Processes Restored", "All optimizer-suspended processes have been resumed.")
+    # ── shell ───────────────────────────────────────────────────────────────
+    def tourable(content):
+        """Wrap a section so the guided tour can put a glowing ring around it."""
+        return ft.Container(content=content, border_radius=19, padding=3,
+                            border=ft.Border.all(2, ft.Colors.TRANSPARENT),
+                            animate=ft.Animation(250, ft.AnimationCurve.EASE_OUT))
 
-    def action_pill(label_txt, icon, glow, handler):
-        return ft.Container(
-            content=ft.Row([ft.Icon(icon, size=15, color=glow),
-                            ft.Text(label_txt, size=12, color=TEXT, weight=ft.FontWeight.W_600)],
-                           spacing=7, tight=True),
-            padding=ft.Padding(15, 9, 15, 9), border_radius=11, on_click=handler,
-            bgcolor=ft.Colors.with_opacity(0.08, glow),
-            border=ft.Border.all(1, ft.Colors.with_opacity(0.20, glow)))
+    w_bar      = tourable(ft.Row([mode_chip, status_pill, theme_btn, conn_btn, tour_btn], spacing=8))
+    w_gauges   = tourable(gauges)
+    w_tiles    = tourable(tiles)
+    w_chart    = tourable(chart_card)
+    w_xai      = tourable(xai_card)
+    w_wl       = tourable(wl_card)
+    w_session  = tourable(session_card)
+    w_procs    = tourable(proc_card)
+    w_controls = tourable(controls_card)
+    w_log      = tourable(log_card)
+    w_footer   = tourable(footer)
 
-    boost_pill = action_pill("Boost", ft.Icons.BOLT_ROUNDED, ACCENT, on_boost)
-    undo_pill = action_pill("Undo", ft.Icons.UNDO_ROUNDED, ACCENT_2, on_undo)
-    undo_pill.opacity = 0.45
+    topbar.controls[1] = w_bar   # swap the plain button row for the tourable one
 
-    # ── reusable pieces ──────────────────────────────────────────────────────
-    def gauge(rng, val, sub_text, glow):
-        center = ft.Container(
-            content=ft.Row([val, ft.Text("%", size=18, weight=ft.FontWeight.W_600, color=MUTED)],
-                           alignment=ft.MainAxisAlignment.CENTER,
-                           vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=2, tight=True),
-            width=150, height=150, alignment=ft.Alignment.CENTER)
-        return glass(
-            ft.Column([ft.Stack([rng, center], alignment=ft.Alignment.CENTER, width=150, height=150),
-                       lbl(sub_text, size=11, color=MUTED, weight=ft.FontWeight.W_600)],
-                      horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                      alignment=ft.MainAxisAlignment.CENTER, spacing=12),
-            glow=glow, expand=True, height=210)
+    shell = ft.Container(content=ft.Column([
+        topbar, ft.Container(height=11), banner,
+        ft.Row([
+            ft.Column([w_gauges, ft.Container(height=9), w_tiles, ft.Container(height=9),
+                       w_chart, ft.Container(height=9), w_xai,
+                       ft.Container(height=9), w_wl], expand=7, spacing=0),
+            ft.Column([w_session, ft.Container(height=9), w_procs, ft.Container(height=9),
+                       w_controls, ft.Container(height=9), w_log], expand=4, spacing=0),
+        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
+        ft.Container(height=9), w_footer], spacing=0),
+        padding=24,
+        gradient=ft.LinearGradient(begin=ft.Alignment.TOP_LEFT, end=ft.Alignment.BOTTOM_RIGHT,
+                                   colors=[T["bg"], T["bg2"]]))
+    reg(shell, "gradient", lambda t: ft.LinearGradient(
+        begin=ft.Alignment.TOP_LEFT, end=ft.Alignment.BOTTOM_RIGHT, colors=[t["bg"], t["bg2"]]))
+    page.add(shell)
 
-    def mini(icon, value_ctrl, name, glow):
-        return glass(
-            ft.Column([ft.Row([ft.Icon(icon, size=18, color=glow),
-                               lbl(name, size=11, color=MUTED, weight=ft.FontWeight.W_600)],
-                              spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                       ft.Container(height=4), value_ctrl], spacing=2),
-            glow=glow, glow_strength=0.12, expand=True, height=104, padding=16, radius=18)
+    # ── rendering ───────────────────────────────────────────────────────────
+    last = [12, 42, 6, 44, 8, 2400]
+    def render(cpu, mem, risk, temp, swap, freq, push=True):
+        last[:] = [cpu, mem, risk, temp, swap, freq]
+        cpu_ring.value = max(0.0, min(1.0, cpu/100.0)); cpu_val.value = str(int(cpu))
+        mem_ring.value = max(0.0, min(1.0, mem/100.0)); mem_val.value = str(int(mem))
+        risk_ring.value = max(0.0, min(1.0, risk/100.0)); risk_val.value = str(int(risk))
+        cpu_ring.color = T["cyan"]; mem_ring.color = T["teal"]
+        risk_ring.color = T["red"] if risk >= 80 else (T["amber"] if risk >= 45 else T["cyan"])
+        temp_v.value = ("—" if temp is None or temp < 0 else str(int(temp)))
+        swap_v.value = f"{int(swap)}%"
+        freq_v.value = ("—" if not freq else f"{int(freq)}")
+        hist.append(cpu); hist.pop(0)
+        for b, v in zip(bars, hist):
+            b.height = max(6, min(112, v*1.0))
+            tok = "red" if v >= 85 else ("amber" if v >= 55 else "cyan")
+            b.bgcolor = ft.Colors.with_opacity(0.85, T[tok])
+        if push:
+            upd()
 
-    def attr_row(name, glow):
-        fill, val = attr[name]
-        fill.bgcolor = glow
-        track = ft.Container(content=fill, height=8, border_radius=8, expand=True,
-                             bgcolor=ft.Colors.with_opacity(0.07, GLASS),
-                             alignment=ft.Alignment.CENTER_LEFT)
-        return ft.Row([lbl(name, size=12, color=TEXT, weight=ft.FontWeight.W_600),
-                       ft.Container(content=track, expand=True), val],
-                      spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    def set_status(text, token):
+        st["status_token"] = token
+        status_txt.value = text; status_txt.color = T[token]; status_dot.bgcolor = T[token]
 
-    # ── First-run guided tour ────────────────────────────────────────────────
-    TOUR_FLAG = os.path.join(os.path.expanduser("~"), ".sro_ui_tour_seen")
-    tour_canvas = cv.Canvas(shapes=[], expand=True)
-    tour_step_lbl = ft.Text("", size=11, color=ACCENT, weight=ft.FontWeight.W_700)
-    tour_title = ft.Text("", size=16, weight=ft.FontWeight.BOLD, color=TEXT)
-    tour_body = ft.Text("", size=12.5, color=MUTED)
-    tour_next_txt = ft.Text("Next", size=12, weight=ft.FontWeight.W_700, color=BG_TOP)
+    # ── theming ─────────────────────────────────────────────────────────────
+    def apply_theme():
+        T.clear(); T.update(LIGHT if st["light"] else DARK)
+        page.bgcolor = T["bg"]
+        page.theme_mode = ft.ThemeMode.LIGHT if st["light"] else ft.ThemeMode.DARK
+        for ctrl, attr_, resolver in REG:
+            try: setattr(ctrl, attr_, resolver(T))
+            except Exception: pass
+        for i, t_, token in log_items:
+            i.color = T[token]; t_.color = T[token]
+        for p in proc_rows: paint_proc(p)
+        paint_pills()
+        theme_btn.icon = ft.Icons.DARK_MODE_ROUNDED if st["light"] else ft.Icons.LIGHT_MODE_ROUNDED
+        theme_btn.tooltip = "Switch to dark mode" if st["light"] else "Switch to light mode"
+        render(*last)
 
-    STEPS = [
-        dict(title="Navigation", t_left=330, t_top=150,
-             sx=330, sy=212, c1x=300, c1y=150, c2x=272, c2y=214, tx=246, ty=212,
-             body="Switch between Dashboard, AI Analytics, Settings and Help from this sidebar."),
-        dict(title="CPU & Memory", t_left=470, t_top=250,
-             sx=500, sy=250, c1x=460, c1y=215, c2x=420, c2y=200, tx=398, ty=170,
-             body="Live system load from the optimizer service. Green is healthy, red means pressure."),
-        dict(title="Quick stats", t_left=600, t_top=250,
-             sx=770, sy=250, c1x=860, c1y=215, c2x=935, c2y=190, tx=950, ty=150,
-             body="Swap, temperature, disk I/O and live network speed — all at a glance."),
-        dict(title="CPU activity", t_left=470, t_top=500,
-             sx=640, sy=500, c1x=710, c1y=470, c2x=755, c2y=455, tx=765, ty=435,
-             body="A rolling history of how hard your CPU is working."),
-        dict(title="Boost & processes", t_left=430, t_top=300,
-             sx=560, sy=360, c1x=620, c1y=440, c2x=680, c2y=485, tx=700, ty=508,
-             body="Top memory hogs. Use Boost to free memory now, Undo to resume. You're all set!"),
-    ]
-    tour_idx = {"i": 0}
+    def toggle_theme(e):
+        st["light"] = not st["light"]; apply_theme(); upd()
+    theme_btn.on_click = toggle_theme
 
-    def arrow_shapes(s):
-        stroke = ft.Paint(color=ACCENT, stroke_width=2.5, style=ft.PaintingStyle.STROKE,
-                          stroke_dash_pattern=[9, 7], stroke_cap=ft.StrokeCap.ROUND)
-        line = cv.Path([cv.Path.MoveTo(s["sx"], s["sy"]),
-                        cv.Path.CubicTo(s["c1x"], s["c1y"], s["c2x"], s["c2y"], s["tx"], s["ty"])],
-                       paint=stroke)
-        ang = math.atan2(s["ty"] - s["c2y"], s["tx"] - s["c2x"])
-        L, W = 17, 8.5
-        bx, by = s["tx"] - L * math.cos(ang), s["ty"] - L * math.sin(ang)
-        perp = ang + math.pi / 2
-        p1 = (bx + W * math.cos(perp), by + W * math.sin(perp))
-        p2 = (bx - W * math.cos(perp), by - W * math.sin(perp))
-        head = cv.Path([cv.Path.MoveTo(s["tx"], s["ty"]), cv.Path.LineTo(*p1),
-                        cv.Path.LineTo(*p2), cv.Path.Close()],
-                       paint=ft.Paint(color=ACCENT, style=ft.PaintingStyle.FILL))
-        return [line, head]
-
-    def tour_apply():
-        s = STEPS[tour_idx["i"]]
-        tour_canvas.shapes = arrow_shapes(s)
-        tour_card.left, tour_card.top = s["t_left"], s["t_top"]
-        tour_title.value = s["title"]
-        tour_body.value = s["body"]
-        tour_step_lbl.value = f"STEP {tour_idx['i'] + 1} / {len(STEPS)}"
-        tour_next_txt.value = "Done" if tour_idx["i"] == len(STEPS) - 1 else "Next"
-
-    def tour_advance(_e=None):
-        if tour_idx["i"] >= len(STEPS) - 1:
-            tour_finish()
-            return
-        tour_idx["i"] += 1
-        tour_apply()
-        page.update()
-
-    def tour_finish(_e=None):
-        overlay.visible = False
+    # ── LIVE mode ───────────────────────────────────────────────────────────
+    def send_cmd(cmd, **kw):
+        if not st["live"]: return None
         try:
-            with open(TOUR_FLAG, "w") as f:
-                f.write("1")
-        except Exception:
-            pass
-        page.update()
+            payload = {"type": "command", "cmd": cmd}
+            payload.update(kw)
+            return backend.request(payload)
+        except Exception as ex:
+            add_log(f"Command '{cmd}' failed: {ex}", "red", ft.Icons.CLOUD_OFF_ROUNDED)
+            go_offline(f"connection lost during '{cmd}'")
+            return None
 
-    def start_tour(_e=None):
-        tour_idx["i"] = 0
-        tour_apply()
-        overlay.visible = True
-        page.update()
+    def ingest_logs(entries, initial=False):
+        new = []
+        for e in entries or []:
+            sig = f"{e.get('time','')}|{e.get('message','')}"
+            if sig in st["log_seen"]:
+                continue
+            st["log_seen"].add(sig)
+            new.append(e)
+        if initial:
+            new = new[-5:]
+        for e in new:
+            msg = e.get("message", "")
+            low = msg.lower()
+            if "suspend" in low or "throttl" in low:
+                token, ic = "amber", ft.Icons.PAUSE_CIRCLE_FILLED_ROUNDED
+            elif "resum" in low or "undo" in low:
+                token, ic = "mint", ft.Icons.PLAY_CIRCLE_FILLED_ROUNDED
+            elif "boost" in low:
+                token, ic = "cyan", ft.Icons.ROCKET_LAUNCH_ROUNDED
+            else:
+                token, ic = "text2", ft.Icons.CHEVRON_RIGHT_ROUNDED
+            add_log(f"{e.get('time','')}  {msg}", token, ic)
 
-    tour_card = ft.Container(
-        content=glass(ft.Column([
-            tour_step_lbl, ft.Container(height=4), tour_title, ft.Container(height=6), tour_body,
-            ft.Container(height=16),
-            ft.Row([
-                ft.Container(content=ft.Text("Skip tour", size=12, color=MUTED),
-                             padding=ft.Padding(10, 9, 10, 9), on_click=tour_finish),
-                ft.Container(expand=True),
-                ft.Container(content=tour_next_txt, padding=ft.Padding(22, 9, 22, 9),
-                             border_radius=12, bgcolor=ACCENT, on_click=tour_advance),
-            ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        ], spacing=0), glow=ACCENT, width=320),
-        left=300, top=176, width=320,
-        animate_position=ft.Animation(320, ft.AnimationCurve.EASE_OUT))
+    def apply_live(resp, initial=False):
+        latest = resp.get("latest_result") or {}
+        f = latest.get("features") or {}
+        cpu = f.get("cpu_percent_raw", f.get("cpu_percent", 0)) or 0
+        mem = f.get("mem_percent_raw", f.get("mem_percent", 0)) or 0
+        conf = latest.get("confidence", 0) or 0
+        risk = conf * 100.0
+        temp = f.get("cpu_temp_c", -1)
+        swap = f.get("swap_percent", 0) or 0
+        freq = f.get("cpu_freq_mhz", 0) or 0
 
-    tour_skip_pill = ft.Container(
-        content=ft.Row([ft.Text("Skip tour", size=12.5, color=TEXT, weight=ft.FontWeight.W_700),
-                        ft.Icon(ft.Icons.CLOSE_ROUNDED, size=16, color=TEXT)], spacing=8, tight=True),
-        padding=ft.Padding(16, 10, 16, 10), border_radius=14, right=30, top=26,
-        bgcolor=ft.Colors.with_opacity(0.12, GLASS),
-        border=ft.Border.all(1, ft.Colors.with_opacity(0.20, GLASS)),
-        on_click=tour_finish)
+        # calibration state
+        if resp.get("calibrating"):
+            done, total = (resp.get("calib_progress") or (0, 90))
+            set_status(f"CALIBRATING {int(done)}/{int(total)}s", "violet")
+            chart_sub.value = "calibrating — learning this machine"
+        else:
+            thr = st["thr"]
+            if risk >= thr:
+                set_status("PREDICTING", "amber")
+            elif risk >= 45:
+                set_status("WATCHING", "cyan")
+            else:
+                set_status("ALL CLEAR", "mint")
+            chart_sub.value = "live · 1 Hz"
 
-    overlay = ft.Stack([
-        ft.Container(expand=True, bgcolor=ft.Colors.with_opacity(0.74, "#05080B"), on_click=tour_advance),
-        ft.Container(content=tour_canvas, expand=True),
-        tour_card, tour_skip_pill,
-    ], expand=True, visible=False)
+        render(cpu, mem, risk, temp, swap, freq, push=False)   # one update at the end
 
-    # ── VIEW: Dashboard ──────────────────────────────────────────────────────
-    def view_dashboard():
-        return ft.Column([
-            ft.Row([
-                gauge(cpu_ring, cpu_val, "CPU LOAD", ACCENT),
-                gauge(mem_ring, mem_val, "MEMORY", ACCENT_2),
-                ft.Column([
-                    ft.Row([mini(ft.Icons.SWAP_HORIZ_ROUNDED, swap_v, "SWAP", VIOLET),
-                            mini(ft.Icons.THERMOSTAT_ROUNDED, temp_v, "TEMP °C", WARN)], spacing=16),
-                    ft.Row([mini(ft.Icons.UPLOAD_ROUNDED, net_up, "NET ↑ MB/s", ACCENT),
-                            mini(ft.Icons.DOWNLOAD_ROUNDED, net_dn, "NET ↓ MB/s", ACCENT_2)], spacing=16),
-                ], spacing=16, expand=True),
-            ], spacing=16),
-            ft.Container(height=16),
-            ft.Row([
-                ft.Column([mini(ft.Icons.STORAGE_ROUNDED, disk_v, "DISK I/O MB/s", ACCENT_2),
-                           mini(ft.Icons.LAYERS_ROUNDED, proc_n, "PROCESSES", VIOLET)],
-                          spacing=16, width=250),
-                glass(ft.Column([
-                    ft.Row([card_title(ft.Icons.SHOW_CHART, "CPU ACTIVITY", ACCENT),
-                            ft.Container(expand=True), lbl("live", size=11)]),
-                    ft.Container(height=10), ft.Container(content=spark, expand=True)],
-                    spacing=0), glow=ACCENT, expand=True, height=190),
-            ], spacing=16, vertical_alignment=ft.CrossAxisAlignment.START),
-            ft.Container(height=16),
-            glass(ft.Column([
-                ft.Row([card_title(ft.Icons.MEMORY_ROUNDED, "TOP PROCESSES BY MEMORY", VIOLET),
-                        ft.Container(expand=True), susp_txt, boost_pill, undo_pill],
-                       spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Container(height=12), proc_list], spacing=0, expand=True),
-                  glow=VIOLET, expand=True),
-        ], spacing=0, expand=True)
+        # attributions
+        att = latest.get("attributions") or []
+        if len(att) >= 4:
+            set_attr(att[0], att[1], att[2], att[3])
 
-    # ── VIEW: AI Analytics ───────────────────────────────────────────────────
-    def view_analytics():
-        return ft.Column([
-            ft.Row([
-                gauge(risk_ring, risk_val, "BOTTLENECK CONFIDENCE", VIOLET),
-                glass(ft.Column([
-                    card_title(ft.Icons.INSIGHTS, "PREDICTION", VIOLET),
-                    ft.Container(height=10), risk_desc,
-                    ft.Container(height=12), an_pred,
-                    ft.Container(height=6), an_thresh,
-                    ft.Container(height=14),
-                    lbl("Live output from the on-device model running in the background service.",
-                        size=11, color=MUTED),
-                ], spacing=0, expand=True), glow=VIOLET, expand=True, height=210),
-            ], spacing=16),
-            ft.Container(height=16),
-            glass(ft.Column([
-                card_title(ft.Icons.AUTO_GRAPH, "FEATURE ATTRIBUTION", ACCENT),
-                ft.Container(height=16),
-                attr_row("CPU", ACCENT), ft.Container(height=14),
-                attr_row("Memory", ACCENT_2), ft.Container(height=14),
-                attr_row("Temp", WARN), ft.Container(height=14),
-                attr_row("Swap", VIOLET),
-                ft.Container(height=18),
-                lbl("How much each signal contributes to the model's current prediction.",
-                    size=11, color=MUTED),
-            ], spacing=0), glow=ACCENT, expand=True),
-        ], spacing=0, expand=True)
+        # forecast banner
+        if not resp.get("calibrating") and risk >= st["thr"]:
+            banner.visible = True; banner.opacity = 1
+            forecast_txt.value = (f"CPU → {latest.get('predicted_cpu',0):.0f}%, "
+                                  f"MEM → {latest.get('predicted_mem',0):.0f}% in ~30 s  ·  "
+                                  f"{risk:.0f}% confidence (acts at {st['thr']}%)")
+        else:
+            banner.visible = False
 
-    # ── VIEW: Settings ───────────────────────────────────────────────────────
-    def setting_row(icon, title, desc, control, glow):
-        return ft.Row([
-            ft.Container(content=ft.Icon(icon, size=20, color=glow), width=42, height=42,
-                         border_radius=12, alignment=ft.Alignment.CENTER,
-                         bgcolor=ft.Colors.with_opacity(0.08, glow)),
-            ft.Column([ft.Text(title, size=14, color=TEXT, weight=ft.FontWeight.W_600),
-                       ft.Text(desc, size=11, color=MUTED)], spacing=2, expand=True),
-            control,
-        ], spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        # sync controls with the service
+        prof = resp.get("active_profile")
+        if prof and prof != st["profile"] and prof in pills:
+            st["profile"] = prof
+            st["thr"] = {"Eco": 70, "Balanced": 80, "Gaming": 90}.get(prof, 80)
+            thr_txt.value = f"Acts at {st['thr']}% confidence"
+            paint_pills()
+        ap = resp.get("autopilot_enabled")
+        if ap is not None and ap != auto_sw.value:
+            auto_sw.value = ap; st["autopilot"] = ap
 
-    def view_settings():
-        build_profile_pills()
-        update_threshold_text()
-        refresh_whitelist()
-        return ft.Column([
-            glass(ft.Column([
-                card_title(ft.Icons.POWER_SETTINGS_NEW_ROUNDED, "BACKGROUND SERVICE", ACCENT),
-                ft.Container(height=16),
-                setting_row(ft.Icons.POWER_ROUNDED, "Run Background Service",
-                            "Turn off to completely stop (kill) the service; turn on to start it again",
-                            service_switch, ACCENT),
-            ], spacing=0), glow=ACCENT),
-            ft.Container(height=16),
-            glass(ft.Column([
-                card_title(ft.Icons.TUNE_ROUNDED, "ENGINE", ACCENT),
-                ft.Container(height=16),
-                setting_row(ft.Icons.BOLT_ROUNDED, "Background Optimizer Engine",
-                            "Monitor and mitigate bottlenecks", opt_switch, ACCENT),
-                ft.Divider(color=ft.Colors.with_opacity(0.06, GLASS), height=24),
-                setting_row(ft.Icons.AUTO_MODE, "Auto-Pilot",
-                            "Act automatically when risk is high", auto_switch, ACCENT_2),
-                ft.Divider(color=ft.Colors.with_opacity(0.06, GLASS), height=24),
-                setting_row(ft.Icons.NOTIFICATIONS_ACTIVE_ROUNDED, "Native Notifications",
-                            "OS banners on optimizer actions", notify_switch, VIOLET),
-            ], spacing=0), glow=ACCENT),
-            ft.Container(height=16),
-            glass(ft.Column([
-                card_title(ft.Icons.SPEED_ROUNDED, "PERFORMANCE PROFILE", ACCENT_2),
-                ft.Container(height=14), profile_pills_row,
-                ft.Container(height=18), set_thresh_txt,
-            ], spacing=0), glow=ACCENT_2),
-            ft.Container(height=16),
-            glass(ft.Column([
-                card_title(ft.Icons.SHIELD_ROUNDED, "PROTECTED PROCESSES", VIOLET),
-                ft.Container(height=6),
-                lbl("These apps are never suspended by the optimizer.", size=11, color=MUTED),
-                ft.Container(height=12),
-                ft.Row([wl_input,
-                        ft.Container(content=ft.Text("Add", size=12, color=BG_TOP, weight=ft.FontWeight.W_700),
-                                     padding=ft.Padding(18, 12, 18, 12), border_radius=12,
-                                     bgcolor=ACCENT, on_click=wl_add)],
-                       spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Container(height=14), wl_list,
-            ], spacing=0), glow=VIOLET),
-        ], spacing=0, scroll=ft.ScrollMode.HIDDEN, expand=True)
+        # processes + suspended
+        susp = {(s.get("display_name") or s.get("name") or "").split(" (")[0]
+                for s in (resp.get("suspended_processes") or [])}
+        st["protected"] = len(susp)
+        prot_v.value = str(len(susp))
+        items = []
+        for p in (resp.get("top_processes") or [])[:5]:
+            nm = p.get("display_name") or p.get("name") or "?"
+            mp = p.get("memory_percent")
+            mem_s = f"{mp:.1f}%" if isinstance(mp, (int, float)) else "—"
+            items.append((nm, mem_s, "suspended" if nm.split(" (")[0] in susp else "running"))
+        for s in (resp.get("suspended_processes") or []):
+            nm = (s.get("display_name") or s.get("name") or "?")
+            if not any(nm.split(" (")[0] == i[0].split(" (")[0] for i in items):
+                items.append((nm, "—", "suspended"))
+        if items:
+            set_proc_list(items[:6])
 
-    # ── VIEW: Help ───────────────────────────────────────────────────────────
-    def help_card(icon, title, body, glow):
-        return glass(ft.Column([card_title(icon, title, glow), ft.Container(height=8),
-                                ft.Text(body, size=13, color=MUTED)], spacing=0),
-                     glow=glow, glow_strength=0.12)
+        ingest_logs(resp.get("logs"), initial=initial)
+        upd()
 
-    def view_help():
-        return ft.Column([
-            ft.Row([ft.Container(expand=True),
-                    ft.Container(content=ft.Row([ft.Icon(ft.Icons.REPLAY_ROUNDED, size=16, color=ACCENT),
-                                                 ft.Text("Replay tour", size=12, color=ACCENT,
-                                                         weight=ft.FontWeight.W_600)], spacing=8),
-                                 padding=ft.Padding(14, 9, 14, 9), border_radius=12, on_click=start_tour,
-                                 bgcolor=ft.Colors.with_opacity(0.06, GLASS),
-                                 border=ft.Border.all(1, ft.Colors.with_opacity(0.12, ACCENT)))]),
-            ft.Container(height=14),
-            help_card(ft.Icons.SPEED, "What is SRO?",
-                      "System Resource Optimizer watches your CPU, memory, swap and I/O in real time "
-                      "and gently suspends low-priority background processes when it predicts a "
-                      "bottleneck — keeping your active apps responsive.", ACCENT),
-            ft.Container(height=14),
-            help_card(ft.Icons.DONUT_LARGE, "Reading the gauges",
-                      "The rings show live CPU and Memory load. Green is healthy, amber is busy, "
-                      "red means pressure. The sparkline tracks recent CPU activity.", ACCENT_2),
-            ft.Container(height=14),
-            help_card(ft.Icons.INSIGHTS, "AI Analytics",
-                      "The Analytics tab shows the background model's bottleneck confidence and which "
-                      "signal (CPU, memory, temp, swap) is driving the prediction.", VIOLET),
-            ft.Container(height=14),
-            help_card(ft.Icons.SHIELD_ROUNDED, "What's protected",
-                      "Your foreground app, developer tools, browsers and the optimizer itself are "
-                      "never suspended. Add your own apps under Settings → Protected Processes.", WARN),
-        ], spacing=0, scroll=ft.ScrollMode.HIDDEN, expand=True)
-
-    views = {"dashboard": view_dashboard(), "analytics": view_analytics(),
-             "settings": view_settings(), "help": view_help()}
-
-    # ── sidebar / nav ────────────────────────────────────────────────────────
-    nav_items = {}
-
-    def make_nav(name, icon, key):
-        ic = ft.Icon(icon, size=20, color=MUTED)
-        tx = ft.Text(name, size=13, weight=ft.FontWeight.W_600, color=MUTED)
-        cont = ft.Container(content=ft.Row([ic, tx], spacing=14,
-                                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                            padding=ft.Padding(14, 11, 14, 11), border_radius=14,
-                            on_click=lambda e: set_view(key))
-        nav_items[key] = (cont, ic, tx)
-        return cont
-
-    def restyle_nav():
-        for k, (cont, ic, tx) in nav_items.items():
-            active = (k == state["view"])
-            cont.bgcolor = ft.Colors.with_opacity(0.10, GLASS) if active else None
-            cont.border = ft.Border.all(1, ft.Colors.with_opacity(0.10, GLASS)) if active else None
-            ic.color = ACCENT if active else MUTED
-            tx.color = TEXT if active else MUTED
-
-    def set_view(key):
-        state["view"] = key
-        body.content = views[key]
-        restyle_nav()
-        page.update()
-
-    def refresh_status():
-        if state["service_stopped"]:
-            status_dot.bgcolor = ft.Colors.with_opacity(0.5, CRIT)
-            status_txt.value = "SERVICE STOPPED"
-            status_txt.color = MUTED
-            return
-        if not client.connected:
-            status_dot.bgcolor = ft.Colors.with_opacity(0.6, WARN)
-            status_txt.value = "CONNECTING…"
-            status_txt.color = WARN
-            return
-        on = state["optimizer"]
-        status_dot.bgcolor = ACCENT if on else ft.Colors.with_opacity(0.5, MUTED)
-        status_txt.value = "OPTIMIZER ACTIVE" if on else "OPTIMIZER PAUSED"
-        status_txt.color = TEXT if on else MUTED
-
-    sidebar = glass(ft.Column([
-        ft.Row([ft.Container(content=ft.Icon(ft.Icons.BOLT_ROUNDED, color=BG_TOP, size=22),
-                             width=42, height=42, border_radius=13, alignment=ft.Alignment.CENTER,
-                             gradient=ft.LinearGradient(begin=ft.Alignment.TOP_LEFT,
-                                                        end=ft.Alignment.BOTTOM_RIGHT,
-                                                        colors=[ACCENT, ACCENT_2])),
-                ft.Column([ft.Text("SRO", size=16, weight=ft.FontWeight.BOLD, color=TEXT),
-                           ft.Text("Resource Optimizer", size=10, color=MUTED)], spacing=0)],
-               spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        ft.Container(height=26),
-        make_nav("Dashboard", ft.Icons.DASHBOARD_ROUNDED, "dashboard"),
-        ft.Container(height=6),
-        make_nav("AI Analytics", ft.Icons.INSIGHTS, "analytics"),
-        ft.Container(height=6),
-        make_nav("Settings", ft.Icons.SETTINGS_ROUNDED, "settings"),
-        ft.Container(height=6),
-        make_nav("Help", ft.Icons.HELP_ROUNDED, "help"),
-        ft.Container(expand=True),
-        ft.Row([status_dot, status_txt], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        ft.Container(height=8),
-        ft.Row([clock, ft.Container(expand=True), ft.Text(str(VERSION), size=10, color=MUTED)]),
-    ], spacing=0, expand=True), width=232, glow=ACCENT, glow_strength=0.10, radius=24)
-
-    body = ft.Container(content=views["dashboard"], expand=True, padding=ft.Padding(8, 0, 0, 0))
-    restyle_nav()
-
-    page.add(ft.Stack([
-        ft.Container(expand=True, gradient=ft.LinearGradient(
-            begin=ft.Alignment.TOP_CENTER, end=ft.Alignment.BOTTOM_CENTER, colors=[BG_TOP, BG_BOT])),
-        blob(ACCENT, 520, -160, -180), blob(ACCENT_2, 460, 880, -120), blob(VIOLET, 420, 420, 560),
-        ft.Container(content=ft.Row([sidebar, body], spacing=18, expand=True),
-                     padding=ft.Padding(22, 22, 22, 22), expand=True),
-        toast,
-        overlay,
-    ], expand=True))
-
-    tour_apply()
-    overlay.visible = not os.path.exists(TOUR_FLAG)
-
-    def bar(v):
-        h = max(4, (v / 100.0) * 82)
-        c = pct_color(v)
-        return ft.Container(width=12, height=h, border_radius=6,
-                            gradient=ft.LinearGradient(begin=ft.Alignment.BOTTOM_CENTER,
-                                                       end=ft.Alignment.TOP_CENTER,
-                                                       colors=[ft.Colors.with_opacity(0.35, c), c]))
-
-    def proc_row(name, m):
-        return ft.Row([
-            ft.Container(width=8, height=8, border_radius=8, bgcolor=pct_color(m * 6)),
-            ft.Text(name[:34], size=13, color=TEXT, weight=ft.FontWeight.W_500, expand=True, no_wrap=True),
-            ft.Container(content=ft.Container(width=max(6, min(120, m * 6)), height=6, border_radius=6,
-                                              bgcolor=ACCENT),
-                         width=120, height=6, border_radius=6,
-                         bgcolor=ft.Colors.with_opacity(0.08, GLASS), alignment=ft.Alignment.CENTER_LEFT),
-            ft.Text(f"{m:.1f}%", size=12, color=MUTED, width=52, text_align=ft.TextAlign.RIGHT),
-        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-
-    # ── background service auto-launch (ported) ──────────────────────────────
-    def launch_background_service():
-        import subprocess
-        try:
-            tmp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            tmp.settimeout(0.5)
-            tmp.connect(("127.0.0.1", IPC_PORT))
-            tmp.close()
-            return  # already running
-        except Exception:
-            pass
+    def launch_service():
+        """Start the background service — handles frozen (PyInstaller) builds,
+        Windows detached launch, and running from source."""
         try:
             if getattr(sys, "frozen", False):
                 base_dir = os.path.dirname(sys.executable)
                 if platform.system() == "Windows":
                     srv = os.path.join(base_dir, "SystemResourceOptimizerService.exe")
                     if os.path.exists(srv):
-                        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                        flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                 | getattr(subprocess, "DETACHED_PROCESS", 0x00000008))
                         subprocess.Popen([srv], creationflags=flags)
+                        return True
                 else:
                     srv = os.path.join(base_dir, "SystemResourceOptimizerService")
                     if os.path.exists(srv):
-                        subprocess.Popen([srv], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                         start_new_session=True)
-            else:
-                script = os.path.join(_DIR, "optimizer_service.py")
+                        subprocess.Popen([srv], stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL, start_new_session=True)
+                        return True
+                return False
+
+            for script in (os.path.join(_DIR, "optimizer_service.py"),
+                           os.path.join(_DIR, "src", "optimizer_service.py")):
                 if os.path.exists(script):
                     if sys.platform == "win32":
                         import re
-                        pyw = re.sub(r'python\.exe$', 'pythonw.exe', sys.executable, flags=re.IGNORECASE)
+                        pyw = re.sub(r"python\.exe$", "pythonw.exe", sys.executable,
+                                     flags=re.IGNORECASE)
                         py_cmd = pyw if os.path.exists(pyw) else sys.executable
-                        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                        flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                 | getattr(subprocess, "DETACHED_PROCESS", 0x00000008))
                         subprocess.Popen([py_cmd, script], creationflags=flags)
                     else:
                         subprocess.Popen([sys.executable, script], stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL, start_new_session=True)
-        except Exception as e:
-            log.warning("Failed to launch background service: %s", e)
+                    return True
+            return False
+        except Exception:
+            return False
 
-    # ── apply a service snapshot to the UI ───────────────────────────────────
-    def apply_update(resp):
-        for n in resp.get("pending_notifications", []):
-            notify(n.get("title", ""), n.get("message", ""))
+    def enter_live(full):
+        st["live"] = True
+        st["log_seen"].clear()
+        mode_txt.value = "LIVE"
+        conn_btn.text = "  Disconnect"; conn_btn.icon = ft.Icons.LINK_OFF_ROUNDED
+        add_log(f"Connected to the background service at {IPC_HOST}:{IPC_PORT}.",
+                "mint", ft.Icons.SENSORS_ROUNDED)
+        svc_sw.value = True
+        apply_theme()
+        apply_live(full, initial=True)
+        refresh_whitelist()
 
-        state["optimizer"] = resp.get("optimizer_active", True)
-        state["autopilot"] = resp.get("autopilot_enabled", True)
-        state["profile"] = resp.get("active_profile", state["profile"])
-        opt_switch.value = state["optimizer"]
-        auto_switch.value = state["autopilot"]
-        refresh_status()
-        update_threshold_text()
+    def go_offline(reason=""):
+        was_live = st["live"]
+        st["live"] = False
+        backend.close()
+        mode_txt.value = "OFFLINE"
+        conn_btn.text = "  Connect"; conn_btn.icon = ft.Icons.SENSORS_ROUNDED
+        chart_sub.value = "last 48 s"
+        if was_live:
+            add_log(f"Disconnected from the background service. {reason}".strip(),
+                    "amber", ft.Icons.CLOUD_OFF_ROUNDED)
+            set_status("ALL CLEAR", "mint")
+            banner.visible = False
+            set_proc_list(OFFLINE_PROCS)
+            set_attr(0, 0, 0, 0)
+            refresh_whitelist()
+        apply_theme(); upd()
 
-        latest = resp.get("latest_result")
-        if latest:
-            f = latest.get("features", {}) or {}
-            cpu = f.get("cpu_percent_raw", f.get("cpu_percent", 0)) or 0
-            mem = f.get("mem_percent_raw", f.get("mem_percent", 0)) or 0
-            swap = f.get("swap_percent", 0) or 0
-            temp = f.get("cpu_temp_c", 0) or 0
-            up = f.get("net_sent_mbps", 0) or 0
-            dn = f.get("net_recv_mbps", 0) or 0
-            dio = (f.get("disk_read_mbps", 0) or 0) + (f.get("disk_write_mbps", 0) or 0)
-            pcount = f.get("process_count", 0) or 0
-
-            cpu_ring.value, cpu_ring.color, cpu_val.value = cpu / 100, pct_color(cpu), f"{cpu:.0f}"
-            mem_ring.value, mem_ring.color, mem_val.value = mem / 100, pct_color(mem), f"{mem:.0f}"
-            swap_v.value = f"{swap:.0f}%"
-            if temp > 0:
-                temp_v.value, temp_v.color = f"{temp:.0f}", pct_color(temp)
-            else:
-                temp_v.value, temp_v.color = "—", MUTED
-            net_up.value, net_dn.value = f"{up:.1f}", f"{dn:.1f}"
-            disk_v.value = f"{dio:.1f}"
-            proc_n.value = f"{pcount}"
-            hist.append(cpu)
-            spark.controls = [bar(v) for v in hist]
-
-            if latest.get("calibrating"):
-                elapsed, total = resp.get("calib_progress", (0, CALIBRATION_SECONDS))
-                cpct = min(100, max(1, int((elapsed / total) * 100))) if total else 0
-                risk_ring.value, risk_ring.color = (elapsed / total if total else 0), WARN
-                risk_val.value = f"{cpct}"
-                risk_desc.value = f"Calibrating telemetry… {cpct}%"
-                an_pred.value = "Predicted CPU ≈ —"
-            else:
-                conf = latest.get("confidence", 0.0) or 0
-                cpct = int(conf * 100)
-                risk_ring.value, risk_ring.color = conf, pct_color(cpct)
-                risk_val.value = f"{cpct}"
-                risk_desc.value = ("High risk — bottleneck likely imminent." if cpct >= 80
-                                   else "Elevated risk — optimizer may act soon." if cpct >= 55
-                                   else "Low risk — system has headroom.")
-                an_pred.value = f"Predicted CPU ≈ {latest.get('predicted_cpu', 0.0):.0f}%"
-
-            attrs = latest.get("attributions")
-            if attrs and len(attrs) >= 4:
-                for i, nm in enumerate(("CPU", "Memory", "Temp", "Swap")):
-                    fill, val = attr[nm]
-                    w = max(0.0, min(1.0, attrs[i] or 0))
-                    fill.width = w * 360
-                    val.value = f"{int(w * 100)}%"
-
-        susp = resp.get("suspended_processes", [])
-        undo_state["enabled"] = len(susp) > 0
-        undo_pill.opacity = 1.0 if undo_state["enabled"] else 0.45
-        susp_txt.value = f"{len(susp)} suspended"
-
-        top = resp.get("top_processes", [])
-        proc_list.controls = [proc_row(p.get("display_name") or p.get("name", "—"),
-                                       p.get("memory_percent", 0) or 0)
-                              for p in top[:8]]
-        clock.value = time.strftime("%H:%M:%S")
-
-    # ── poll loop ────────────────────────────────────────────────────────────
+    # Async poll loop — same pattern the production dashboard uses. Blocking
+    # socket I/O is pushed to a worker thread with asyncio.to_thread so the UI
+    # event loop keeps repainting (a raw thread calling page.update() freezes it).
     async def poll_service_worker():
-        started = False
+        try:
+            await _poll_loop()
+        except Exception:
+            import traceback
+            print("POLL WORKER DIED:", traceback.format_exc(), file=sys.stderr, flush=True)
+
+    async def _poll_loop():
+        launched = False
         while True:
-            if getattr(page, "user_shutdown_requested", False):
-                break
             try:
-                if state["service_stopped"]:
-                    # User killed the service — reflect it and do NOT relaunch.
-                    service_switch.value = False
-                    started = False
-                    refresh_status()
-                    try:
-                        page.update()
-                    except Exception:
-                        pass
-                    await asyncio.sleep(1.0)
+                if not st["want_live"]:
+                    if st["live"]:
+                        go_offline("")
+                    await asyncio.sleep(0.5)
                     continue
-                if not client.connected:
-                    refresh_status()
-                    if not started:
-                        launch_background_service()
-                        started = True
-                        await asyncio.sleep(1.0)
-                    if not client.connect():
-                        try:
-                            page.update()
-                        except Exception:
-                            pass
-                        await asyncio.sleep(1.5)
+
+                if not st["live"]:
+                    mode_txt.value = "CONNECTING"
+                    upd()
+                    try:
+                        await asyncio.to_thread(backend.connect)
+                        full = await asyncio.to_thread(backend.request,
+                                                       {"type": "get_full_state"})
+                        enter_live(full)
+                        launched = False   # allow a relaunch if it ever dies later
+                        upd()
+                    except Exception:
+                        backend.close()
+                        if not launched:
+                            launched = True
+                            if launch_service():
+                                add_log("No service found — starting it now…",
+                                        "muted", ft.Icons.POWER_SETTINGS_NEW_ROUNDED)
+                                upd()
+                                await asyncio.sleep(4.0)
+                            else:
+                                add_log("Could not locate optimizer_service.py — running offline.",
+                                        "amber", ft.Icons.CLOUD_OFF_ROUNDED)
+                                st["want_live"] = False
+                                go_offline("")
+                        else:
+                            mode_txt.value = "OFFLINE"
+                            upd()
+                            await asyncio.sleep(2.0)
                         continue
-                    started = False
-                resp = await asyncio.to_thread(client.send_request, {"type": "get_update"})
-                if resp.get("connected"):
-                    service_switch.value = True
-                    if not state["announced"]:
-                        state["announced"] = True
-                        show_toast("Background service initialized", ft.Icons.CHECK_CIRCLE_ROUNDED, ACCENT)
-                    apply_update(resp)
                 else:
-                    client.connected = False
-                    refresh_status()
-                try:
-                    page.update()
-                except Exception:
-                    pass
+                    resp = await asyncio.to_thread(backend.request, {"type": "get_update"})
+                    apply_live(resp)
+                    upd()
+
             except Exception as err:
-                log.warning("poll loop error: %s", err)
+                # Connection dropped — keep the UI alive and retry on the next tick.
+                backend.close()
+                if st["live"]:
+                    st["live"] = False
+                    mode_txt.value = "RECONNECTING"
+                    add_log(f"Connection lost — reconnecting… ({err})",
+                            "amber", ft.Icons.CLOUD_OFF_ROUNDED)
+                    upd()
             await asyncio.sleep(1.0)
 
-    # ── window close: never kill the service; force-exit this process ────────
+    def toggle_conn(e):
+        st["want_live"] = not st["want_live"]
+        if not st["want_live"]:
+            go_offline("")
+        else:
+            mode_txt.value = "CONNECTING"; upd()
+    conn_btn.on_click = toggle_conn
+
+    # ── actions ─────────────────────────────────────────────────────────────
+    def do_boost(e):
+        if st["running"]: return
+        if st["live"]:
+            r = send_cmd("boost")
+            if r: add_log(r.get("message", "Boost sent."), "cyan", ft.Icons.ROCKET_LAUNCH_ROUNDED)
+            upd(); return
+        acted = False
+        for p in proc_rows:
+            if p["state"] == "running" and p["name"] != "Code Editor":
+                set_proc(p, "suspended"); acted = True
+                st["protected"] += 1; prot_v.value = str(st["protected"])
+        add_log("One-Click Boost — trimmed memory & suspended heavy apps."
+                if acted else "Boost: nothing heavy to suspend right now.",
+                "cyan" if acted else "muted", ft.Icons.ROCKET_LAUNCH_ROUNDED)
+        upd()
+
+    def do_undo(e):
+        if st["running"]: return
+        if st["live"]:
+            r = send_cmd("undo")
+            if r: add_log(r.get("message", "Undo sent."), "mint", ft.Icons.REPLAY_ROUNDED)
+            upd(); return
+        n = sum(1 for p in proc_rows if p["state"] == "suspended")
+        for p in proc_rows:
+            if p["state"] == "suspended": set_proc(p, "running")
+        add_log(f"Undo — resumed {n} process(es). No work lost." if n else "Nothing to undo.",
+                "mint" if n else "muted", ft.Icons.REPLAY_ROUNDED)
+        upd()
+
+    boost_btn.on_click = do_boost; undo_btn.on_click = do_undo
+
+    # ── window close: never kill the service; exit this process cleanly ─────
     def on_window_event(e):
         evt = getattr(getattr(e, "type", None), "value", None) or getattr(e, "data", None)
         if evt in ("close", "destroy", "quit", "exit", "window_close"):
             if getattr(page, "_closing_in_progress", False):
                 return
             page._closing_in_progress = True
-            page.user_shutdown_requested = True
-            try:
-                client.close()
-            except Exception:
-                pass
+            st["live"] = False; st["want_live"] = False
+            try: backend.close()
+            except Exception: pass
             try:
                 page.window.prevent_close = False
                 page.window.destroy()
-            except Exception:
-                pass
+            except Exception: pass
 
             def finalize_exit():
                 try:
-                    notifier.send_sync(
-                        title="⚡ SRO Dashboard Closed",
-                        message="Optimizer service is still running in the background to keep your system fast.",
-                        timeout=1)
+                    if notifier:
+                        notifier.send_sync(
+                            title="⚡ SRO Dashboard Closed",
+                            message="The optimizer service is still running in the background "
+                                    "to keep your system fast.",
+                            timeout=1)
                 except Exception:
                     pass
                 time.sleep(0.15)
@@ -990,179 +903,143 @@ def main(page: ft.Page):
     page.window.on_event = on_window_event
     page.window.prevent_close = True
 
+    # ── guided tour ─────────────────────────────────────────────────────────
+    UP, DOWN = ft.Icons.ARROW_UPWARD_ROUNDED, ft.Icons.ARROW_DOWNWARD_ROUNDED
+    LEFTA, RIGHTA = ft.Icons.ARROW_BACK_ROUNDED, ft.Icons.ARROW_FORWARD_ROUNDED
+
+    # (target, arrow, callout-left, callout-top, title, body)
+    STEPS = [
+        (w_bar, UP, 660, 92, "Connection, theme & this tour",
+         "LIVE means the background service is connected and streaming real data. "
+         "Connect/Disconnect, switch light or dark, or replay this tour any time."),
+        (w_gauges, LEFTA, 826, 128, "The three live gauges",
+         "CPU load and Memory are measured now. BOTTLENECK RISK is the AI's confidence that a "
+         "slowdown is coming in the next 30 seconds — it turns amber, then red."),
+        (w_tiles, LEFTA, 826, 262, "Supporting hardware signals",
+         "Package temperature, swap pressure and CPU frequency. These feed the model too — "
+         "12 signals are sampled every single second."),
+        (w_chart, LEFTA, 826, 372, "Live telemetry",
+         "The last 48 seconds of CPU load. The model reads a rolling 60-second window of all "
+         "12 signals — it looks at the trend, not just this instant."),
+        (w_xai, LEFTA, 826, 556, "Explainable AI — the 'why'",
+         "The model doesn't just say a bottleneck is coming, it says which signal caused that "
+         "belief. Each bar is measured by blanking one signal and seeing how much confidence drops."),
+        (w_wl, LEFTA, 826, 690, "Protected processes",
+         "Apps you never want touched. Critical system processes are protected automatically; "
+         "add your own here and the optimizer will always skip them."),
+        (w_session, RIGHTA, 426, 96, "Session impact",
+         "How many bottlenecks have been prevented, and how many processes the optimizer has "
+         "acted on since it started."),
+        (w_procs, RIGHTA, 426, 196, "Top processes",
+         "Your real running apps, ranked by memory. When one is throttled it turns amber and "
+         "reads SUSPENDED — frozen, never closed, so no work is lost."),
+        (w_controls, RIGHTA, 426, 400, "Controls",
+         "Eco / Balanced / Gaming set how confident the AI must be before it acts (70/80/90%). "
+         "Auto-Pilot lets it act on its own. Boost frees resources now; Undo restores everything."),
+        (w_log, RIGHTA, 426, 596, "Event feed",
+         "A running record of every decision: forecasts, suspensions, resumes and your commands — "
+         "with timestamps, straight from the service."),
+        (w_footer, DOWN, 426, 640, "Under the hood",
+         "A 2-layer GRU with 44,525 parameters, exported to 8-bit ONNX. One prediction takes under "
+         "2.8 ms and the whole optimizer costs under 1.8% CPU."),
+    ]
+
+    tour = {"i": 0, "on": False}
+
+    tour_arrow = ft.Icon(LEFTA, size=28, color=T["cyan"])
+    reg(tour_arrow, "color", lambda t: t["cyan"])
+    tour_step = ft.Text("", size=9.5, color=T["muted"], weight=ft.FontWeight.W_700)
+    reg(tour_step, "color", lambda t: t["muted"])
+    tour_title = ft.Text("", size=14, weight=ft.FontWeight.BOLD, color=T["text"])
+    reg(tour_title, "color", lambda t: t["text"])
+    tour_body = ft.Text("", size=11.5, color=T["text2"], no_wrap=False)
+    reg(tour_body, "color", lambda t: t["text2"])
+
+    tour_skip = ft.TextButton("Skip", style=ft.ButtonStyle(color=T["muted"]))
+    reg(tour_skip, "style", lambda t: ft.ButtonStyle(color=t["muted"]))
+    tour_back = ft.TextButton("Back", style=ft.ButtonStyle(color=T["text2"]))
+    reg(tour_back, "style", lambda t: ft.ButtonStyle(color=t["text2"]))
+    tour_next = styled(ft.FilledButton("Next"), "cyan", True, (16, 10))
+
+    tour_card = ft.Container(
+        width=360, padding=16, border_radius=15, bgcolor=T["card"],
+        border=ft.Border.all(1, ft.Colors.with_opacity(0.35, T["cyan"])),
+        shadow=ft.BoxShadow(blur_radius=34, spread_radius=2,
+                            color=ft.Colors.with_opacity(0.5, "#000000"),
+                            offset=ft.Offset(0, 10)),
+        content=ft.Row([
+            ft.Container(content=tour_arrow, padding=ft.Padding(0, 2, 0, 0)),
+            ft.Column([tour_step, tour_title, ft.Container(height=3), tour_body,
+                       ft.Container(height=10),
+                       ft.Row([tour_skip, ft.Row([tour_back, tour_next], spacing=4)],
+                              alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
+                      spacing=2, expand=True)],
+            spacing=12, vertical_alignment=ft.CrossAxisAlignment.START))
+    reg(tour_card, "bgcolor", lambda t: t["card"])
+    reg(tour_card, "border", lambda t: ft.Border.all(1, ft.Colors.with_opacity(0.35, t["cyan"])))
+
+    tour_layer = ft.Stack([tour_card], expand=True, visible=False)
+    page.overlay.append(tour_layer)
+
+    def clear_rings():
+        for target, *_ in STEPS:
+            target.border = ft.Border.all(2, ft.Colors.TRANSPARENT)
+            target.shadow = None
+
+    def show_step(i):
+        clear_rings()
+        target, arrow, left, top, title, bodytext = STEPS[i]
+        target.border = ft.Border.all(2, T["cyan"])
+        target.shadow = ft.BoxShadow(blur_radius=26, spread_radius=1,
+                                     color=ft.Colors.with_opacity(0.5, T["cyan"]))
+        tour_arrow.icon = arrow
+        tour_card.left, tour_card.top = left, top
+        tour_step.value = f"STEP {i+1} OF {len(STEPS)}"
+        tour_title.value = title
+        tour_body.value = bodytext
+        tour_back.visible = i > 0
+        tour_next.text = "Done" if i == len(STEPS) - 1 else "Next"
+        upd()
+
+    def start_tour(e=None):
+        tour["i"] = 0; tour["on"] = True
+        tour_layer.visible = True
+        show_step(0)
+
+    def end_tour(e=None):
+        tour["on"] = False
+        tour_layer.visible = False
+        clear_rings()
+        upd()
+
+    def next_step(e=None):
+        if tour["i"] >= len(STEPS) - 1:
+            end_tour(); return
+        tour["i"] += 1; show_step(tour["i"])
+
+    def prev_step(e=None):
+        if tour["i"] > 0:
+            tour["i"] -= 1; show_step(tour["i"])
+
+    tour_next.on_click = next_step
+    tour_back.on_click = prev_step
+    tour_skip.on_click = end_tour
+    tour_btn.on_click = start_tour
+
+    set_proc_list(OFFLINE_PROCS)
+    apply_theme()
+    render(12, 42, 6, 44, 8, 2400)
+
+    # Connect to the background service (starting it if needed) and keep the
+    # live telemetry flowing, exactly like the production dashboard.
     page.run_task(poll_service_worker)
 
-
-# ── Windows taskbar icon patch (ported verbatim; win32-only, lazy psutil) ─────
-def _set_windows_taskbar_icon_async() -> None:
-    def worker():
-        import time as _t
-        import os as _o
-        import ctypes
-        from ctypes import wintypes
-        import psutil
-
-        _t.sleep(0.5)
-        my_pid = _o.getpid()
-        child_pids = {my_pid}
-        try:
-            cur = psutil.Process(my_pid)
-            child_pids.update(p.pid for p in cur.children(recursive=True))
-        except Exception:
-            pass
-
-        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-
-        for attempt in range(40):
-            if attempt % 5 == 0 and attempt > 0:
-                try:
-                    cur = psutil.Process(my_pid)
-                    child_pids = {my_pid}
-                    child_pids.update(p.pid for p in cur.children(recursive=True))
-                except Exception:
-                    pass
-
-            hwnd_found = [None]
-
-            def enum_callback(hwnd, lparam):
-                if ctypes.windll.user32.IsWindowVisible(hwnd):
-                    cn = ctypes.create_unicode_buffer(256)
-                    ctypes.windll.user32.GetClassNameW(hwnd, cn, 256)
-                    if cn.value == "FLUTTER_RUNNER_WIN32_WINDOW":
-                        pid = wintypes.DWORD()
-                        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                        if pid.value in child_pids:
-                            hwnd_found[0] = hwnd
-                            return False
-                return True
-
-            cb = WNDENUMPROC(enum_callback)
-            ctypes.windll.user32.EnumWindows(cb, 0)
-            if hwnd_found[0] is not None:
-                hwnd = hwnd_found[0]
-                try:
-                    class GUID(ctypes.Structure):
-                        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
-                                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
-
-                        def __init__(self, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8):
-                            self.Data1, self.Data2, self.Data3 = l, w1, w2
-                            self.Data4 = (ctypes.c_ubyte * 8)(b1, b2, b3, b4, b5, b6, b7, b8)
-
-                    IID = GUID(0x886d8eeb, 0x8cf2, 0x4446, 0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99)
-                    shell32 = ctypes.windll.shell32
-                    ps = ctypes.c_void_p()
-                    hr = shell32.SHGetPropertyStoreForWindow(hwnd, ctypes.byref(IID), ctypes.byref(ps))
-                    if hr >= 0 and ps.value:
-                        class PROPERTYKEY(ctypes.Structure):
-                            _fields_ = [("fmtid", GUID), ("pid", ctypes.c_ulong)]
-
-                        PKEY = PROPERTYKEY(GUID(0x9F4C2855, 0x0379, 0x4D01, 0x87, 0xE5, 0x45, 0xD6,
-                                                0xD7, 0x42, 0x46, 0x94), 5)
-
-                        class PROPVARIANT(ctypes.Structure):
-                            _fields_ = [("vt", ctypes.c_ushort), ("r1", ctypes.c_ushort),
-                                        ("r2", ctypes.c_ushort), ("r3", ctypes.c_ushort),
-                                        ("pwszVal", ctypes.c_wchar_p), ("pad", ctypes.c_ubyte * 8)]
-
-                        pv = PROPVARIANT()
-                        pv.vt = 31
-                        pv.pwszVal = "addo561.sro.systemresourceoptimizer.v2"
-                        vtp = ctypes.cast(ps, ctypes.POINTER(ctypes.c_void_p))
-                        vt = ctypes.cast(vtp[0], ctypes.POINTER(ctypes.c_void_p))
-                        SetValue = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p,
-                                                      ctypes.POINTER(PROPERTYKEY),
-                                                      ctypes.POINTER(PROPVARIANT))(vt[6])
-                        Commit = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p)(vt[7])
-                        Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vt[2])
-                        hs = SetValue(ps, ctypes.byref(PKEY), ctypes.byref(pv))
-                        hc = Commit(ps)
-                        Release(ps)
-                        if hs >= 0 and hc >= 0:
-                            break
-                except Exception:
-                    pass
-            _t.sleep(0.5)
-
-    threading.Thread(target=worker, daemon=True).start()
-
-
-def _patch_flet_app_macos() -> None:
-    """Make our SRO icon win the macOS Dock slot.
-
-    Flet renders the window via a separate bundled "Flet.app" (a Flutter
-    runner). By default that app shows the generic Flet logo in the Dock. We:
-      • when FROZEN  → set LSUIElement=True so the Flet renderer is hidden from
-        the Dock entirely, leaving only our real .app bundle (which carries
-        icon.icns from the PyInstaller spec) visible.
-      • when SOURCE  → keep it visible (LSUIElement=False) but replace its
-        AppIcon.icns with ours, so `python dashboard.py` still shows our icon.
-    Also rename it to "System Resource Optimizer" in the title bar.
-    """
-    import glob
-    import plistlib
-    import shutil
-
-    try:
-        import flet_desktop
-        flet_desktop.ensure_client_cached()
-    except Exception as e:
-        print(f"[icon-patch] ensure_client_cached failed: {e}", flush=True)
-
-    matches = sorted(glob.glob(os.path.expanduser(
-        "~/.flet/client/flet-desktop-*/Flet.app/Contents")), reverse=True)
-    if not matches:
-        return
-    contents = matches[0]
-    plist_path = os.path.join(contents, "Info.plist")
-    res_dir = os.path.join(contents, "Resources")
-    try:
-        with open(plist_path, "rb") as fh:
-            plist = plistlib.load(fh)
-        target_lsui = bool(getattr(sys, "frozen", False))
-        changed = False
-        if plist.get("LSUIElement") != target_lsui:
-            plist["LSUIElement"] = target_lsui
-            changed = True
-        for key in ("CFBundleName", "CFBundleDisplayName"):
-            if plist.get(key) != "System Resource Optimizer":
-                plist[key] = "System Resource Optimizer"
-                changed = True
-        if changed:
-            with open(plist_path, "wb") as fh:
-                plistlib.dump(plist, fh)
-            os.utime(os.path.dirname(contents), None)  # nudge LaunchServices
-    except Exception as e:
-        print(f"[icon-patch] plist skipped: {e}", flush=True)
-    try:
-        our_icns = os.path.join(BASE_DIR, "assets", "icon.icns")
-        if os.path.exists(our_icns):
-            for name in ("AppIcon.icns", "AppIcon"):
-                shutil.copy2(our_icns, os.path.join(res_dir, name))
-    except Exception as e:
-        print(f"[icon-patch] icon skipped: {e}", flush=True)
+    # Show the guided tour on every launch, once the window has settled.
+    async def autostart_tour():
+        await asyncio.sleep(1.4)
+        start_tour()
+    page.run_task(autostart_tour)
 
 
 if __name__ == "__main__":
-    try:
-        if sys.platform == "darwin":
-            try:
-                _patch_flet_app_macos()
-            except Exception as e:
-                print(f"[icon-patch] macOS patch failed: {e}", flush=True)
-        if sys.platform == "win32":
-            import ctypes as _ct
-            try:
-                _ct.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                    "addo561.sro.systemresourceoptimizer.v2")
-            except Exception:
-                pass
-            try:
-                _set_windows_taskbar_icon_async()
-            except Exception:
-                pass
-        _assets = os.path.join(BASE_DIR, "assets")
-        ft.run(main, assets_dir=_assets)
-    except Exception as e:
-        print(f"❌ Flet dashboard runtime error: {e}", flush=True)
-        sys.exit(1)
+    ft.run(main)
