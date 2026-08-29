@@ -18,7 +18,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION="$(cat "$SCRIPT_DIR/src/assets/version.txt" 2>/dev/null || echo v4.1.0)"
+VERSION="$(cat "$SCRIPT_DIR/src/assets/version.txt" 2>/dev/null || echo v4.1.1)"
 echo "============================================================"
 echo "  System Resource Optimizer  ${VERSION}"
 echo "============================================================"

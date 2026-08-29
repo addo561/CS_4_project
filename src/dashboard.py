@@ -440,12 +440,28 @@ def main(page: ft.Page):
 
     # ── protected processes (user whitelist) ────────────────────────────────
     wl_list = ft.Column(spacing=6)
-    wl_input = ft.TextField(hint_text="app name, e.g. obs64", dense=True,
-                            text_size=12, height=42, expand=True,
-                            border_radius=10, content_padding=ft.Padding(12, 8, 12, 8))
-    wl_add = ft.IconButton(ft.Icons.ADD_ROUNDED, icon_color=T["mint"], icon_size=20,
-                           tooltip="Protect this app")
-    reg(wl_add, "icon_color", lambda t: t["mint"])
+    WL_H = 44
+    wl_input = ft.TextField(
+        hint_text="Add an app to protect — e.g. obs64",
+        text_size=12.5, height=WL_H, expand=True,
+        border_radius=11, border_width=1, focused_border_width=1.6,
+        content_padding=ft.Padding(14, 0, 14, 0),
+        border_color=ft.Colors.with_opacity(T["line_op"] + 0.08, T["line"]),
+        focused_border_color=T["violet"],
+        cursor_color=T["violet"],
+        bgcolor=T["panel"], filled=True,
+        text_style=ft.TextStyle(color=T["text"]),
+        hint_style=ft.TextStyle(color=T["muted"], size=12))
+    reg(wl_input, "border_color", lambda t: ft.Colors.with_opacity(t["line_op"] + 0.08, t["line"]))
+    reg(wl_input, "focused_border_color", lambda t: t["violet"])
+    reg(wl_input, "cursor_color", lambda t: t["violet"])
+    reg(wl_input, "bgcolor", lambda t: t["panel"])
+    reg(wl_input, "text_style", lambda t: ft.TextStyle(color=t["text"]))
+    reg(wl_input, "hint_style", lambda t: ft.TextStyle(color=t["muted"], size=12))
+
+    wl_add = ft.FilledButton("  Add", icon=ft.Icons.ADD_ROUNDED, height=WL_H,
+                             tooltip="Protect this app")
+    styled(wl_add, "violet", False, (16, 0))
 
     def wl_row(name):
         rm = ft.IconButton(ft.Icons.CLOSE_ROUNDED, icon_size=15, icon_color=T["muted"],
@@ -489,7 +505,8 @@ def main(page: ft.Page):
         txt("These apps are never suspended — system processes are always protected too.",
             10.5, "muted"),
         ft.Container(height=9),
-        ft.Row([wl_input, wl_add], spacing=6),
+        ft.Row([wl_input, wl_add], spacing=8,
+               vertical_alignment=ft.CrossAxisAlignment.CENTER),
         ft.Container(height=8), wl_list], spacing=2))
 
     # ── footer ──────────────────────────────────────────────────────────────
