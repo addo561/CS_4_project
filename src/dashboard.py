@@ -439,7 +439,7 @@ def main(page: ft.Page):
                 ft.Container(undo_btn, expand=True)], spacing=9)], spacing=2))
 
     # ── protected processes (user whitelist) ────────────────────────────────
-    wl_list = ft.Column(spacing=6)
+    wl_list = ft.Row(wrap=True, spacing=8, run_spacing=8)
     WL_H = 44
     wl_input = ft.TextField(
         hint_text="Add an app to protect — e.g. obs64",
@@ -518,18 +518,24 @@ def main(page: ft.Page):
     reg(picker_arrow, "icon_color", lambda t: t["violet"])
 
     def wl_row(name):
-        rm = ft.IconButton(ft.Icons.CLOSE_ROUNDED, icon_size=15, icon_color=T["muted"],
-                           tooltip="Stop protecting")
+        """One protected app, rendered as a compact chip so entries flow
+        side by side and wrap, instead of stacking full-width."""
         def do_rm(e, n=name):
             send_cmd("remove_whitelist", value=n)
             add_log(f"Removed “{n}” from protected apps.", "muted", ft.Icons.LOCK_ROUNDED)
             refresh_whitelist(); upd()
-        rm.on_click = do_rm
-        return ft.Container(content=ft.Row([
-                ft.Row([ft.Icon(ft.Icons.LOCK_ROUNDED, size=13, color=T["violet"]),
-                        ft.Text(name, size=12, color=T["text"])], spacing=8),
-                rm], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            padding=ft.Padding(11, 2, 4, 2), border_radius=9, bgcolor=T["panel"])
+        x = ft.Container(content=ft.Icon(ft.Icons.CLOSE_ROUNDED, size=13, color=T["muted"]),
+                         padding=ft.Padding(3, 3, 3, 3), border_radius=9,
+                         tooltip="Stop protecting", on_click=do_rm)
+        return ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.LOCK_ROUNDED, size=12, color=T["violet"]),
+                ft.Text(name, size=11.5, color=T["text"], weight=ft.FontWeight.W_500),
+                x], spacing=6, tight=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding(10, 4, 5, 4), border_radius=16,
+            bgcolor=ft.Colors.with_opacity(0.13, T["violet"]),
+            border=ft.Border.all(1, ft.Colors.with_opacity(0.30, T["violet"])))
 
     def refresh_whitelist():
         wl_list.controls.clear()
@@ -1023,8 +1029,61 @@ def main(page: ft.Page):
 
     tour = {"i": 0, "on": False}
 
-    tour_arrow = ft.Icon(LEFTA, size=28, color=T["cyan"])
-    reg(tour_arrow, "color", lambda t: t["cyan"])
+    # A long dashed shaft whose dashes ride a wave, ending in an arrow head.
+    WAVE = [0, 4, 8, 10, 8, 4, 0, 4]
+
+    def build_dashed_arrow(direction):
+        col = T["cyan"]
+        horiz = direction in (LEFTA, RIGHTA)
+        dashes = []
+        for i in range(len(WAVE)):
+            w = WAVE[i] if direction in (RIGHTA, DOWN) else WAVE[len(WAVE) - 1 - i]
+            dashes.append(ft.Container(
+                width=10 if horiz else 3, height=3 if horiz else 10,
+                border_radius=2, bgcolor=col,
+                margin=ft.Margin(0, w, 0, 0) if horiz else ft.Margin(w, 0, 0, 0)))
+        head = ft.Icon(direction, size=26, color=col)
+        parts = ([head] + dashes) if direction in (LEFTA, UP) else (dashes + [head])
+        if horiz:
+            return ft.Row(parts, spacing=5, tight=True,
+                          vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        return ft.Column(parts, spacing=5, tight=True,
+                         horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+    tour_arrow = ft.Container(content=build_dashed_arrow(LEFTA),
+                              offset=ft.Offset(0, 0),
+                              animate_offset=ft.Animation(430, ft.AnimationCurve.EASE_IN_OUT))
+
+    async def wiggle_arrow():
+        """Nudge the arrow back and forth along its pointing axis while the
+        tour is open, so the eye follows it to the highlighted card."""
+        out = False
+        while tour["on"]:
+            d = tour.get("dir", LEFTA)
+            a = 0.18
+            if not out:
+                tour_arrow.offset = ft.Offset(0, 0)
+            elif d == LEFTA:
+                tour_arrow.offset = ft.Offset(-a, 0)
+            elif d == RIGHTA:
+                tour_arrow.offset = ft.Offset(a, 0)
+            elif d == UP:
+                tour_arrow.offset = ft.Offset(0, -a)
+            else:
+                tour_arrow.offset = ft.Offset(0, a)
+            out = not out
+            # Repaint just the arrow — a full page.update() twice a second is
+            # far more work than this animation is worth.
+            try:
+                tour_arrow.update()
+            except Exception:
+                pass
+            await asyncio.sleep(0.62)
+        tour_arrow.offset = ft.Offset(0, 0)
+        try:
+            tour_arrow.update()
+        except Exception:
+            pass
     tour_step = ft.Text("", size=9.5, color=T["muted"], weight=ft.FontWeight.W_700)
     reg(tour_step, "color", lambda t: t["muted"])
     tour_title = ft.Text("", size=14, weight=ft.FontWeight.BOLD, color=T["text"])
@@ -1039,23 +1098,22 @@ def main(page: ft.Page):
     tour_next = styled(ft.FilledButton("Next"), "cyan", True, (16, 10))
 
     tour_card = ft.Container(
-        width=360, padding=16, border_radius=15, bgcolor=T["card"],
+        width=360, padding=16, border_radius=15,
+        bgcolor=ft.Colors.with_opacity(0.80, T["card"]),
         border=ft.Border.all(1, ft.Colors.with_opacity(0.35, T["cyan"])),
         shadow=ft.BoxShadow(blur_radius=34, spread_radius=2,
                             color=ft.Colors.with_opacity(0.5, "#000000"),
                             offset=ft.Offset(0, 10)),
-        content=ft.Row([
-            ft.Container(content=tour_arrow, padding=ft.Padding(0, 2, 0, 0)),
-            ft.Column([tour_step, tour_title, ft.Container(height=3), tour_body,
-                       ft.Container(height=10),
-                       ft.Row([tour_skip, ft.Row([tour_back, tour_next], spacing=4)],
-                              alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
-                      spacing=2, expand=True)],
-            spacing=12, vertical_alignment=ft.CrossAxisAlignment.START))
-    reg(tour_card, "bgcolor", lambda t: t["card"])
+        blur=ft.Blur(9, 9, ft.BlurTileMode.MIRROR),
+        content=ft.Column([tour_step, tour_title, ft.Container(height=3), tour_body,
+                           ft.Container(height=10),
+                           ft.Row([tour_skip, ft.Row([tour_back, tour_next], spacing=4)],
+                                  alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
+                          spacing=2))
+    reg(tour_card, "bgcolor", lambda t: ft.Colors.with_opacity(0.80, t["card"]))
     reg(tour_card, "border", lambda t: ft.Border.all(1, ft.Colors.with_opacity(0.35, t["cyan"])))
 
-    tour_layer = ft.Stack([tour_card], expand=True, visible=False)
+    tour_layer = ft.Stack([tour_arrow, tour_card], expand=True, visible=False)
     page.overlay.append(tour_layer)
 
     def clear_rings():
@@ -1069,8 +1127,17 @@ def main(page: ft.Page):
         target.border = ft.Border.all(2, T["cyan"])
         target.shadow = ft.BoxShadow(blur_radius=26, spread_radius=1,
                                      color=ft.Colors.with_opacity(0.5, T["cyan"]))
-        tour_arrow.icon = arrow
+        tour["dir"] = arrow
+        tour_arrow.content = build_dashed_arrow(arrow)
         tour_card.left, tour_card.top = left, top
+        if arrow == LEFTA:
+            tour_arrow.left, tour_arrow.top = left - 142, top + 30
+        elif arrow == RIGHTA:
+            tour_arrow.left, tour_arrow.top = left + 372, top + 30
+        elif arrow == UP:
+            tour_arrow.left, tour_arrow.top = left + 150, top - 108
+        else:
+            tour_arrow.left, tour_arrow.top = left + 150, top + 168
         tour_step.value = f"STEP {i+1} OF {len(STEPS)}"
         tour_title.value = title
         tour_body.value = bodytext
@@ -1079,9 +1146,12 @@ def main(page: ft.Page):
         upd()
 
     def start_tour(e=None):
+        if tour["on"]:
+            return
         tour["i"] = 0; tour["on"] = True
         tour_layer.visible = True
         show_step(0)
+        page.run_task(wiggle_arrow)
 
     def end_tour(e=None):
         tour["on"] = False
