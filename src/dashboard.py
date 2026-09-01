@@ -584,11 +584,25 @@ def main(page: ft.Page):
         pad=14, radius=14)
 
     # ── shell ───────────────────────────────────────────────────────────────
+    TOURABLES = []
+
     def tourable(content):
-        """Wrap a section so the guided tour can put a glowing ring around it."""
-        return ft.Container(content=content, border_radius=19, padding=3,
-                            border=ft.Border.all(2, ft.Colors.TRANSPARENT),
-                            animate=ft.Animation(250, ft.AnimationCurve.EASE_OUT))
+        """Wrap a section so the tour can ring it — and frost it.
+
+        Each card carries its own scrim laid exactly over itself, so the tour
+        never has to guess pixel rectangles: during a step every card frosts
+        except the one being explained.
+        """
+        scrim = ft.Container(left=0, top=0, right=0, bottom=0, visible=False,
+                             border_radius=17,
+                             bgcolor=ft.Colors.with_opacity(0.20, "#0B1220"),
+                             blur=ft.Blur(7, 7, ft.BlurTileMode.MIRROR))
+        w = ft.Container(content=ft.Stack([content, scrim]),
+                         border_radius=19, padding=3,
+                         border=ft.Border.all(2, ft.Colors.TRANSPARENT),
+                         animate=ft.Animation(250, ft.AnimationCurve.EASE_OUT))
+        TOURABLES.append((w, scrim))
+        return w
 
     w_bar      = tourable(ft.Row([mode_chip, status_pill, theme_btn, conn_btn, tour_btn], spacing=8))
     w_gauges   = tourable(gauges)
@@ -774,7 +788,7 @@ def main(page: ft.Page):
             if not any(nm.split(" (")[0] == i[0].split(" (")[0] for i in items):
                 items.append((nm, "—", "suspended"))
         if items:
-            set_proc_list(items[:6])
+            set_proc_list(items[:5])   # fixed count keeps the card height stable
 
         ingest_logs(resp.get("logs"), initial=initial)
         upd()
@@ -992,37 +1006,37 @@ def main(page: ft.Page):
 
     # (target, arrow, callout-left, callout-top, title, body)
     STEPS = [
-        (w_bar, UP, 660, 92, "Connection, theme & this tour",
+        (w_bar, UP, 660, 96, "Connection, theme & this tour",
          "LIVE means the background service is connected and streaming real data. "
          "Connect/Disconnect, switch light or dark, or replay this tour any time."),
-        (w_gauges, LEFTA, 826, 128, "The three live gauges",
+        (w_gauges, LEFTA, 826, 120, "The three live gauges",
          "CPU load and Memory are measured now. BOTTLENECK RISK is the AI's confidence that a "
          "slowdown is coming in the next 30 seconds — it turns amber, then red."),
-        (w_tiles, LEFTA, 826, 262, "Supporting hardware signals",
+        (w_tiles, LEFTA, 826, 250, "Supporting hardware signals",
          "Package temperature, swap pressure and CPU frequency. These feed the model too — "
          "12 signals are sampled every single second."),
-        (w_chart, LEFTA, 826, 372, "Live telemetry",
+        (w_chart, LEFTA, 826, 360, "Live telemetry",
          "The last 48 seconds of CPU load. The model reads a rolling 60-second window of all "
          "12 signals — it looks at the trend, not just this instant."),
-        (w_xai, LEFTA, 826, 556, "Explainable AI — the 'why'",
+        (w_xai, LEFTA, 826, 545, "Explainable AI — the 'why'",
          "The model doesn't just say a bottleneck is coming, it says which signal caused that "
          "belief. Each bar is measured by blanking one signal and seeing how much confidence drops."),
-        (w_wl, LEFTA, 826, 690, "Protected processes",
+        (w_wl, LEFTA, 826, 520, "Protected processes",
          "Apps you never want touched. Critical system processes are protected automatically; "
          "add your own here and the optimizer will always skip them."),
-        (w_session, RIGHTA, 426, 96, "Session impact",
+        (w_session, RIGHTA, 420, 88, "Session impact",
          "How many bottlenecks have been prevented, and how many processes the optimizer has "
          "acted on since it started."),
-        (w_procs, RIGHTA, 426, 196, "Top processes",
+        (w_procs, RIGHTA, 420, 200, "Top processes",
          "Your real running apps, ranked by memory. When one is throttled it turns amber and "
          "reads SUSPENDED — frozen, never closed, so no work is lost."),
-        (w_controls, RIGHTA, 426, 400, "Controls",
+        (w_controls, RIGHTA, 420, 500, "Controls",
          "Eco / Balanced / Gaming set how confident the AI must be before it acts (70/80/90%). "
          "Auto-Pilot lets it act on its own. Boost frees resources now; Undo restores everything."),
-        (w_log, RIGHTA, 426, 596, "Event feed",
+        (w_log, RIGHTA, 420, 700, "Event feed",
          "A running record of every decision: forecasts, suspensions, resumes and your commands — "
          "with timestamps, straight from the service."),
-        (w_footer, DOWN, 426, 640, "Under the hood",
+        (w_footer, DOWN, 420, 470, "Under the hood",
          "A 2-layer GRU with 44,525 parameters, exported to 8-bit ONNX. One prediction takes under "
          "2.8 ms and the whole optimizer costs under 1.8% CPU."),
     ]
@@ -1099,7 +1113,7 @@ def main(page: ft.Page):
 
     tour_card = ft.Container(
         width=360, padding=16, border_radius=15,
-        bgcolor=ft.Colors.with_opacity(0.80, T["card"]),
+        bgcolor=ft.Colors.with_opacity(0.92, T["card"]),
         border=ft.Border.all(1, ft.Colors.with_opacity(0.35, T["cyan"])),
         shadow=ft.BoxShadow(blur_radius=34, spread_radius=2,
                             color=ft.Colors.with_opacity(0.5, "#000000"),
@@ -1110,7 +1124,7 @@ def main(page: ft.Page):
                            ft.Row([tour_skip, ft.Row([tour_back, tour_next], spacing=4)],
                                   alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
                           spacing=2))
-    reg(tour_card, "bgcolor", lambda t: ft.Colors.with_opacity(0.80, t["card"]))
+    reg(tour_card, "bgcolor", lambda t: ft.Colors.with_opacity(0.92, t["card"]))
     reg(tour_card, "border", lambda t: ft.Border.all(1, ft.Colors.with_opacity(0.35, t["cyan"])))
 
     tour_layer = ft.Stack([tour_arrow, tour_card], expand=True, visible=False)
@@ -1120,24 +1134,35 @@ def main(page: ft.Page):
         for target, *_ in STEPS:
             target.border = ft.Border.all(2, ft.Colors.TRANSPARENT)
             target.shadow = None
+        for _w, sc in TOURABLES:
+            sc.visible = False
 
     def show_step(i):
         clear_rings()
         target, arrow, left, top, title, bodytext = STEPS[i]
+        # frost every card except the one this step is about
+        for w, sc in TOURABLES:
+            sc.visible = (w is not target)
         target.border = ft.Border.all(2, T["cyan"])
         target.shadow = ft.BoxShadow(blur_radius=26, spread_radius=1,
                                      color=ft.Colors.with_opacity(0.5, T["cyan"]))
         tour["dir"] = arrow
         tour_arrow.content = build_dashed_arrow(arrow)
+        # Keep the callout fully on screen — the lower steps were placing it
+        # past the bottom edge, putting Skip/Next out of reach.
+        win_h = page.window.height or 820
+        win_w = page.window.width or 1280
+        top = max(14, min(top, win_h - 230))
+        left = max(14, min(left, win_w - 380))
         tour_card.left, tour_card.top = left, top
         if arrow == LEFTA:
             tour_arrow.left, tour_arrow.top = left - 142, top + 30
         elif arrow == RIGHTA:
             tour_arrow.left, tour_arrow.top = left + 372, top + 30
         elif arrow == UP:
-            tour_arrow.left, tour_arrow.top = left + 150, top - 108
+            tour_arrow.left, tour_arrow.top = left + 150, max(4, top - 108)
         else:
-            tour_arrow.left, tour_arrow.top = left + 150, top + 168
+            tour_arrow.left, tour_arrow.top = left + 150, min(win_h - 120, top + 168)
         tour_step.value = f"STEP {i+1} OF {len(STEPS)}"
         tour_title.value = title
         tour_body.value = bodytext
