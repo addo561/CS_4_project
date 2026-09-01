@@ -44,7 +44,7 @@ def get_app_version() -> str:
                         return f"{ver} (Stable)"
             except Exception:
                 pass
-    return "v4.1.1 (Stable)"
+    return "v4.1.2 (Stable)"
 
 VERSION = get_app_version()
 

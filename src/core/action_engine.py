@@ -397,8 +397,23 @@ class ActionEngine:
                 user_whitelist = load_user_whitelist()
                 user_whitelist_lower = {w.lower() for w in user_whitelist}
                 
-            if name in user_whitelist_lower:
-                return False
+            # Match the whitelist against the process name AND its executable
+            # path, using substrings. An app's helper subprocesses rarely share
+            # its name — "whatsapp" must also protect "whatsapp helper
+            # (renderer)", and "onlyoffice" must protect the
+            # ".../ONLYOFFICE.app/.../editors_helper (Renderer)" children that
+            # a manual Boost would otherwise suspend.
+            if user_whitelist_lower:
+                if name in user_whitelist_lower:
+                    return False
+                exe_path = ""
+                try:
+                    exe_path = (proc.exe() or "").lower()
+                except Exception:
+                    pass
+                for _w in user_whitelist_lower:
+                    if len(_w) >= 3 and (_w in name or (exe_path and _w in exe_path)):
+                        return False
 
             if self._is_system_process(proc):
                 return False

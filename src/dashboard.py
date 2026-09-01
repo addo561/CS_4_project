@@ -463,6 +463,60 @@ def main(page: ft.Page):
                              tooltip="Protect this app")
     styled(wl_add, "violet", False, (16, 0))
 
+    # Running-app picker: an arrow beside the field opens a list of the apps
+    # currently running, so a process can be protected without typing its name.
+    proc_choices = []                       # refreshed from every live poll
+    picker_list = ft.Column(spacing=5, scroll=ft.ScrollMode.AUTO, height=168)
+    picker_panel = ft.Container(visible=False, content=picker_list,
+                                padding=ft.Padding(0, 8, 0, 0))
+
+    def build_picker():
+        picker_list.controls.clear()
+        wl_now = set()
+        r = send_cmd("get_whitelist") or {}
+        wl_now = {x.lower() for x in (r.get("whitelist") or [])}
+        if not proc_choices:
+            picker_list.controls.append(
+                txt("Connect to the service to see running apps.", 11, "muted"))
+            return
+        for name in proc_choices:
+            already = name.lower() in wl_now
+            def pick(e, n=name):
+                send_cmd("add_whitelist", value=n)
+                add_log(f"\u201c{n}\u201d is now protected from throttling.",
+                        "violet", ft.Icons.LOCK_ROUNDED)
+                close_picker()
+                refresh_whitelist(); upd()
+            picker_list.controls.append(ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED if already
+                            else ft.Icons.ADD_CIRCLE_OUTLINE_ROUNDED,
+                            size=14, color=T["mint"] if already else T["muted"]),
+                    ft.Text(name, size=12, color=T["text"] if not already else T["muted"],
+                            no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS, expand=True),
+                    ft.Text("protected" if already else "", size=9.5, color=T["mint"]),
+                ], spacing=8),
+                padding=ft.Padding(11, 7, 11, 7), border_radius=9,
+                bgcolor=T["panel"], on_click=None if already else pick))
+
+    def close_picker():
+        picker_panel.visible = False
+        picker_arrow.icon = ft.Icons.ARROW_DROP_DOWN_ROUNDED
+
+    def toggle_picker(e):
+        picker_panel.visible = not picker_panel.visible
+        picker_arrow.icon = (ft.Icons.ARROW_DROP_UP_ROUNDED if picker_panel.visible
+                             else ft.Icons.ARROW_DROP_DOWN_ROUNDED)
+        if picker_panel.visible:
+            build_picker()
+        upd()
+
+    picker_arrow = ft.IconButton(ft.Icons.ARROW_DROP_DOWN_ROUNDED, icon_size=26,
+                                 icon_color=T["violet"], height=WL_H,
+                                 tooltip="Choose from running apps",
+                                 on_click=toggle_picker)
+    reg(picker_arrow, "icon_color", lambda t: t["violet"])
+
     def wl_row(name):
         rm = ft.IconButton(ft.Icons.CLOSE_ROUNDED, icon_size=15, icon_color=T["muted"],
                            tooltip="Stop protecting")
@@ -505,8 +559,9 @@ def main(page: ft.Page):
         txt("These apps are never suspended — system processes are always protected too.",
             10.5, "muted"),
         ft.Container(height=9),
-        ft.Row([wl_input, wl_add], spacing=8,
+        ft.Row([wl_input, picker_arrow, wl_add], spacing=6,
                vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        picker_panel,
         ft.Container(height=8), wl_list], spacing=2))
 
     # ── footer ──────────────────────────────────────────────────────────────
@@ -697,6 +752,11 @@ def main(page: ft.Page):
                 for s in (resp.get("suspended_processes") or [])}
         st["protected"] = len(susp)
         prot_v.value = str(len(susp))
+        proc_choices[:] = sorted({
+            (p.get("display_name") or p.get("name") or "").split(" (")[0].strip()
+            for p in (resp.get("top_processes") or [])
+            if (p.get("display_name") or p.get("name"))
+        })
         items = []
         for p in (resp.get("top_processes") or [])[:5]:
             nm = p.get("display_name") or p.get("name") or "?"
