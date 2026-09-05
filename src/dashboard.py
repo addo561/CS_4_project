@@ -436,7 +436,9 @@ def main(page: ft.Page):
                 svc_sw], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         ft.Container(height=11),
         ft.Row([ft.Container(boost_btn, expand=True),
-                ft.Container(undo_btn, expand=True)], spacing=9)], spacing=2))
+                ft.Container(undo_btn, expand=True)], spacing=9),
+        ft.Container(height=8),
+        ft.Row([ft.Container(report_btn, expand=True)])], spacing=2))
 
     # ── protected processes (user whitelist) ────────────────────────────────
     wl_list = ft.Row(wrap=True, spacing=8, run_spacing=8)
@@ -964,6 +966,23 @@ def main(page: ft.Page):
         add_log(f"Undo — resumed {n} process(es). No work lost." if n else "Nothing to undo.",
                 "mint" if n else "muted", ft.Icons.REPLAY_ROUNDED)
         upd()
+
+    def do_report(e):
+        if not st["live"]:
+            add_log("Connect to the service to generate a report.", "muted")
+            upd(); return
+        add_log("Generating analytics report…", "violet", ft.Icons.ASSESSMENT_ROUNDED)
+        upd()
+        r = send_cmd("generate_report", days=30)
+        if r and r.get("status") == "ok":
+            add_log(f"Report saved to {r.get('path')}", "mint", ft.Icons.ASSESSMENT_ROUNDED)
+        elif r:
+            add_log(f"Report failed: {r.get('message')}", "red", ft.Icons.CLOUD_OFF_ROUNDED)
+        upd()
+
+    report_btn = styled(ft.FilledButton("  Report", icon=ft.Icons.ASSESSMENT_ROUNDED),
+                        "violet", False, (13, 11))
+    report_btn.on_click = do_report
 
     boost_btn.on_click = do_boost; undo_btn.on_click = do_undo
 

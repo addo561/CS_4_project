@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 ROOT = os.path.dirname(os.path.abspath(SPEC))   # Final_year/
 
 # Read version dynamically from version.txt if it exists
-APP_VERSION = "4.1.4"
+APP_VERSION = "4.2.0"
 version_file = os.path.join(ROOT, "src", "assets", "version.txt")
 if os.path.isfile(version_file):
     try:
@@ -51,6 +51,8 @@ hidden = [
     "winotify",
     # plyer
     "plyer", "plyer.platforms.macosx.notification",
+    # reporting
+    "reportlab", "reporting.report", "core.history",
 ]
 hidden += collect_submodules("flet")
 hidden += collect_submodules("flet-desktop")

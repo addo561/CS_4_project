@@ -25,13 +25,13 @@ if _DIR not in sys.path:
 from core.pipeline import Pipeline, PipelineResult
 from core.notifier import Notifier
 from core.process_names import friendly_name
+from core.history import History
 from config import (
     CONFIDENCE_THRESHOLD, CALIBRATION_SECONDS, PROFILES,
     load_user_settings, save_user_settings,
     load_user_whitelist, save_user_whitelist,
-    LOG_DIR, IPC_PORT
+    LOG_DIR, IPC_PORT, VERSION
 )
-
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -90,9 +90,32 @@ class OptimizerService:
         self.last_client_poll = 0.0
         self.CLIENT_ACTIVE_WINDOW = 6.0  # seconds since last poll = "dashboard open"
         self._direct_notifier = Notifier()  # no queue_callback -> fires OS notification
+        # Persistent, queryable record of every mitigation (SQLite).
+        # NOTE: self.history is the in-memory telemetry ring buffer; the event
+        # store is deliberately a separate attribute.
+        try:
+            import platform as _pf
+            self.event_store = History(platform=_pf.system(), version=VERSION)
+        except Exception:
+            self.event_store = None
 
         # Add startup log entry
         self.add_log("Optimizer background service initialized", ACCENT)
+
+    def _names_with_mem(self, names):
+        """The action result carries plain names; the engine's suspended records
+        carry the memory footprint. Match them up so the event store captures
+        how much memory each mitigation actually relieved."""
+        try:
+            lookup = {}
+            for sp in (self.pipeline.get_suspended_processes() if self.pipeline else []):
+                label = getattr(sp, "display_name", "") or getattr(sp, "name", "")
+                base = label.split(" (")[0].strip().lower()
+                if base:
+                    lookup[base] = label
+            return [lookup.get(str(n).split(" (")[0].strip().lower(), n) for n in (names or [])]
+        except Exception:
+            return names or []
 
     def queue_notification(self, title: str, message: str) -> None:
         # Single, reliable source for NATIVE OS notifications — fired directly
@@ -152,10 +175,22 @@ class OptimizerService:
                 if self.pipeline:
                     r = self.pipeline.trigger_boost()
                     self.add_log(f"Auto-Pilot: {r.message}", ACCENT)
+                    if self.event_store and r.action_taken:
+                        self.event_store.record_many(
+                            "suspend", self._names_with_mem(r.affected_names), confidence=res.confidence,
+                            trigger="autopilot",
+                            cpu_percent=(res.features or {}).get("cpu_percent"),
+                            mem_percent=(res.features or {}).get("mem_percent"))
 
         # Log action events if mitigation occurs
         if res.action and res.action.action_taken:
             self.add_log(res.action.message, WARN)
+            if self.event_store:
+                self.event_store.record_many(
+                    res.action.action_type or "suspend", self._names_with_mem(res.action.affected_names),
+                    confidence=res.confidence, trigger="pipeline",
+                    cpu_percent=(res.features or {}).get("cpu_percent"),
+                    mem_percent=(res.features or {}).get("mem_percent"))
 
     def on_calibration_progress(self, elapsed: int, total: int) -> None:
         with self.lock:
@@ -330,6 +365,9 @@ class OptimizerService:
                 if self.pipeline:
                     r = self.pipeline.trigger_boost()
                     self.add_log(r.message, ACCENT)
+                    if self.event_store and r.action_taken:
+                        self.event_store.record_many("suspend", self._names_with_mem(r.affected_names),
+                                                     trigger="manual")
                     return {"status": "ok", "message": r.message}
                 return {"status": "error", "message": "Pipeline not running"}
                 
@@ -337,6 +375,9 @@ class OptimizerService:
                 if self.pipeline:
                     r = self.pipeline.trigger_undo()
                     self.add_log(r.message, MUTED)
+                    if self.event_store:
+                        self.event_store.record_many("resume", r.affected_names,
+                                                     trigger="manual")
                     return {"status": "ok", "message": r.message}
                 return {"status": "error", "message": "Pipeline not running"}
                 
@@ -414,6 +455,19 @@ class OptimizerService:
                     return {"status": "ok"}
                 return {"status": "error", "message": "Invalid value"}
                 
+            elif cmd == "generate_report":
+                try:
+                    from reporting.report import build
+                    days = int(req.get("days", 30))
+                    out = req.get("path") or os.path.join(
+                        os.path.expanduser("~"), "Desktop", "SRO_Analytics_Report.pdf")
+                    path = build(out, days)
+                    self.add_log(f"Analytics report generated: {path}", ACCENT)
+                    return {"status": "ok", "path": path}
+                except Exception as e:
+                    log.warning("Report generation failed: %s", e)
+                    return {"status": "error", "message": str(e)}
+
             elif cmd == "shutdown":
                 self.add_log("Service shutdown command received", WARN)
                 # Signal main loop to stop, which will run shutdown on the main thread
