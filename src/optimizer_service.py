@@ -518,6 +518,15 @@ class OptimizerService:
     def shutdown(self) -> None:
         log.info("Shutting down background service...")
         self.stop_event.set()
+
+        # Stamp the session as closed. A session left with ended_at NULL is
+        # therefore meaningful: the service was killed rather than stopped
+        # cleanly, and any process it had suspended may not have been resumed.
+        if getattr(self, "event_store", None):
+            try:
+                self.event_store.close()
+            except Exception:
+                pass
         
         # Stop pipeline first (this will handle process resumption)
         if self.pipeline:
@@ -567,5 +576,28 @@ class OptimizerService:
 
 
 if __name__ == "__main__":
+    import signal as _signal
+
     service = OptimizerService()
+
+    # core.collector registers its own SIGTERM/SIGINT handler at import time,
+    # which only stops the collector loop — the service's shutdown() never ran,
+    # so suspended processes were not resumed and the session was never closed.
+    # Registering here (after that import) takes precedence.
+    def _graceful(signum, frame):
+        log.info("Signal %s received — shutting down gracefully.", signum)
+        try:
+            service.shutdown()
+        except SystemExit:
+            raise
+        except Exception as exc:
+            log.error("Error during graceful shutdown: %s", exc)
+            sys.exit(1)
+
+    for _sig in (_signal.SIGTERM, _signal.SIGINT):
+        try:
+            _signal.signal(_sig, _graceful)
+        except Exception:
+            pass
+
     service.start()
