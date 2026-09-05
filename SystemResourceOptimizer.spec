@@ -35,6 +35,9 @@ added_files = [
 ]
 added_files += collect_data_files("flet")
 added_files += collect_data_files("flet-desktop")
+# reportlab ships its own font files (.pfb/.ttf); without them the packaged
+# app raises at PDF-generation time on a machine that has no reportlab install.
+added_files += collect_data_files("reportlab")
 
 # ── Hidden imports PyInstaller misses ─────────────────────────────────────────
 hidden = [
