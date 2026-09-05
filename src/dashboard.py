@@ -420,6 +420,8 @@ def main(page: ft.Page):
                        "cyan", False, (13, 11))
     undo_btn = styled(ft.FilledButton("  Undo", icon=ft.Icons.REPLAY_ROUNDED),
                       "mint", False, (13, 11))
+    report_btn = styled(ft.FilledButton("  Report", icon=ft.Icons.ASSESSMENT_ROUNDED),
+                        "violet", False, (13, 11))
 
     controls_card = card(ft.Column([
         title_row(ft.Icons.TUNE_ROUNDED, "Controls", "cyan"),
@@ -980,8 +982,6 @@ def main(page: ft.Page):
             add_log(f"Report failed: {r.get('message')}", "red", ft.Icons.CLOUD_OFF_ROUNDED)
         upd()
 
-    report_btn = styled(ft.FilledButton("  Report", icon=ft.Icons.ASSESSMENT_ROUNDED),
-                        "violet", False, (13, 11))
     report_btn.on_click = do_report
 
     boost_btn.on_click = do_boost; undo_btn.on_click = do_undo
