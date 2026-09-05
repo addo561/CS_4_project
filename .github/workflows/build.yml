@@ -15,7 +15,7 @@ on:
   workflow_dispatch:        # allow manual trigger from the GitHub UI
 
 env:
-  DEFAULT_VERSION: "v4.2.0"
+  DEFAULT_VERSION: "v4.2.1"
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
